@@ -1,0 +1,61 @@
+name: Daily IMA-B 5 Update
+
+on:
+  schedule:
+    # 18h BRT = 21h UTC — só dias úteis (seg-sex)
+    - cron: "0 21 * * 1-5"
+
+  # Permite rodar manualmente pelo GitHub UI
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Rodar backfill completo?"
+        type: boolean
+        default: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # Restaura o banco SQLite do cache (acumulativo entre runs)
+      - name: Restaurar banco do cache
+        uses: actions/cache@v4
+        id: db-cache
+        with:
+          path: data/imab5.db
+          key: imab5-db-${{ github.run_id }}
+          restore-keys: |
+            imab5-db-
+
+      - name: Executar ETL (backfill na 1ª vez)
+        run: |
+          if [ "${{ inputs.backfill }}" = "true" ] || [ "${{ steps.db-cache.outputs.cache-hit }}" != "true" ]; then
+            echo "Rodando backfill..."
+            python etl.py --backfill
+          else
+            echo "Rodando atualização diária..."
+            python etl.py
+          fi
+
+      # Opcional: fazer commit do DB para o branch (descomente se quiser versionar)
+      # - name: Commit banco atualizado
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "github-actions[bot]@users.noreply.github.com"
+      #     git add data/imab5.db
+      #     git diff --cached --quiet || git commit -m "data: IMA-B 5 update $(date +%Y-%m-%d)"
+      #     git push

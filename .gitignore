@@ -1,0 +1,21 @@
+# Banco de dados local (não versionar)
+data/
+*.db
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db

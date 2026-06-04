@@ -1,0 +1,4 @@
+pyield>=0.3
+streamlit>=1.35
+plotly>=5.22
+pandas>=2.1
