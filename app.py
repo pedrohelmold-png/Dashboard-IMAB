@@ -20,10 +20,12 @@ from config import COLOR_CARREGO, COLOR_CDI, COLOR_REAL
 from src.db import (
     get_ultimo_carrego,
     init_db,
+    init_db_fiinfra,
     init_db_imab,
     load_carrego_historico,
     load_composicao,
 )
+from src.fiinfra_ui import render_regua_fiinfra
 
 # ── Configuração da página ─────────────────────────────────────
 st.set_page_config(
@@ -49,6 +51,19 @@ st.markdown("""
 # ── Init DB ────────────────────────────────────────────────────
 init_db()
 init_db_imab()
+init_db_fiinfra()
+
+with st.sidebar:
+    tela_sel = st.radio(
+        "Tela",
+        options=["Carrego IMA-B", "Regua FI-Infra"],
+        index=0,
+    )
+    st.divider()
+
+if tela_sel == "Regua FI-Infra":
+    render_regua_fiinfra()
+    st.stop()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -96,7 +111,7 @@ with st.sidebar:
 
     _ROOT = str(__import__("pathlib").Path(__file__).parent)
 
-    if st.button("⟳  Atualizar hoje", use_container_width=True, type="primary"):
+    if st.button("⟳  Atualizar hoje", width="stretch", type="primary"):
         with st.spinner("Buscando dados do dia…"):
             result = subprocess.run(
                 [sys.executable, "etl.py"] + cfg["etl_flag"],
@@ -129,7 +144,7 @@ with st.sidebar:
     tempo_est  = round(min(n_backfill, 1596) * 0.5 / 60, 1)
 
     lbl = anos_sel.split()[0] + " " + anos_sel.split()[1] if len(anos_sel.split()) > 1 else anos_sel
-    if st.button(f"📥  Baixar histórico ({lbl})", use_container_width=True):
+    if st.button(f"📥  Baixar histórico ({lbl})", width="stretch"):
         placeholder = st.empty()
         placeholder.info(f"Buscando dados na ANBIMA… (~{tempo_est} min)")
         result = subprocess.run(

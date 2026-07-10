@@ -22,6 +22,7 @@ from typing import Generator, Optional
 import pandas as pd
 
 from config import DB_PATH
+from src.regua_fiinfra import DEFAULT_THRESHOLDS
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,71 @@ CREATE INDEX IF NOT EXISTS idx_carrego_imab_data ON carrego_historico_imab(data)
 CREATE INDEX IF NOT EXISTS idx_composicao_imab_data ON composicao_imab(data);
 """
 
+# Schema DDL -- Regua de Ciclo FI-Infra
+_SCHEMA_FIINFRA = """
+PRAGMA journal_mode = WAL;
+
+CREATE TABLE IF NOT EXISTS fiinfra_thresholds (
+    chave          TEXT PRIMARY KEY,
+    valor          REAL NOT NULL,
+    atualizado_em  TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
+    data                      TEXT PRIMARY KEY,
+    ntnb                      REAL,
+    spread                    REAL,
+    excesso_mediano           REAL,
+    duration_mediana          REAL,
+    zona                      TEXT,
+    juro_estado               TEXT,
+    spread_estado             TEXT,
+    excesso_estado            TEXT,
+    juro_pos                  REAL,
+    spread_pos                REAL,
+    excesso_pos               REAL,
+    mandato                   TEXT,
+    cdi                       REAL,
+    aliquota                  REAL,
+    inflacao_implicita        REAL,
+    alternativa_liquida_real  REAL,
+    yield_fundo_real          REAL,
+    acao                      TEXT,
+    destino                   TEXT,
+    venda_bloqueada           INTEGER DEFAULT 0,
+    observacao                TEXT,
+    atualizado_em             TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_fundos_snapshot (
+    data                 TEXT,
+    ticker               TEXT,
+    cota_mercado         REAL,
+    cota_patrimonial     REAL,
+    taxa_total_aa        REAL,
+    duration             REAL,
+    desconto_observado   REAL,
+    desconto_justo       REAL,
+    excesso_desconto     REAL,
+    PRIMARY KEY (data, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_tranches (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo        TEXT NOT NULL,
+    data        TEXT NOT NULL,
+    ticker      TEXT NOT NULL,
+    qtd         REAL NOT NULL,
+    preco       REAL NOT NULL,
+    observacao  TEXT,
+    criado_em   TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_fiinfra_snapshots_data ON fiinfra_snapshots(data);
+CREATE INDEX IF NOT EXISTS idx_fiinfra_fundos_data ON fiinfra_fundos_snapshot(data);
+CREATE INDEX IF NOT EXISTS idx_fiinfra_tranches_data ON fiinfra_tranches(data);
+"""
+
 
 # ─────────────────────────────────────────────────────────────────
 # Conexão
@@ -121,6 +187,18 @@ def init_db_imab(db_path=None) -> None:
     with _conn(db_path) as conn:
         conn.executescript(_SCHEMA_IMAB)
     logger.info(f"Banco IMA-B inicializado em {db_path or DB_PATH}")
+
+
+def init_db_fiinfra(db_path=None) -> None:
+    """Cria as tabelas da Regua FI-Infra se nao existirem. Idempotente."""
+    with _conn(db_path) as conn:
+        conn.executescript(_SCHEMA_FIINFRA)
+        for chave, valor in DEFAULT_THRESHOLDS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO fiinfra_thresholds (chave, valor) VALUES (?, ?)",
+                (chave, valor),
+            )
+    logger.info(f"Banco FI-Infra inicializado em {db_path or DB_PATH}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -170,6 +248,66 @@ def upsert_composicao(
                 round(float(r.get("duration", 0)), 4) if r.get("duration") is not None else None,
                 round(inflacao * 100, 4) if inflacao is not None else None,
             ))
+
+
+def save_fiinfra_thresholds(thresholds: dict, db_path=None) -> None:
+    """Persiste os limiares editaveis da Regua FI-Infra."""
+    with _conn(db_path) as conn:
+        for chave, valor in thresholds.items():
+            conn.execute("""
+                INSERT INTO fiinfra_thresholds (chave, valor, atualizado_em)
+                VALUES (?, ?, datetime('now', 'localtime'))
+                ON CONFLICT(chave) DO UPDATE SET
+                    valor = excluded.valor,
+                    atualizado_em = excluded.atualizado_em
+            """, (chave, float(valor)))
+
+
+def upsert_fiinfra_snapshot(
+    snapshot: dict,
+    fundos: list[dict],
+    db_path=None,
+) -> None:
+    """Grava a foto consolidada da regua e os dados por fundo."""
+    row = {**snapshot, "data": str(snapshot["data"])}
+    row["venda_bloqueada"] = int(bool(row.get("venda_bloqueada", False)))
+
+    with _conn(db_path) as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO fiinfra_snapshots
+              (data, ntnb, spread, excesso_mediano, duration_mediana, zona,
+               juro_estado, spread_estado, excesso_estado,
+               juro_pos, spread_pos, excesso_pos, mandato, cdi, aliquota,
+               inflacao_implicita, alternativa_liquida_real, yield_fundo_real,
+               acao, destino, venda_bloqueada, observacao)
+            VALUES
+              (:data, :ntnb, :spread, :excesso_mediano, :duration_mediana, :zona,
+               :juro_estado, :spread_estado, :excesso_estado,
+               :juro_pos, :spread_pos, :excesso_pos, :mandato, :cdi, :aliquota,
+               :inflacao_implicita, :alternativa_liquida_real, :yield_fundo_real,
+               :acao, :destino, :venda_bloqueada, :observacao)
+        """, row)
+
+        conn.execute("DELETE FROM fiinfra_fundos_snapshot WHERE data = ?", (row["data"],))
+        for fundo in fundos:
+            conn.execute("""
+                INSERT OR REPLACE INTO fiinfra_fundos_snapshot
+                  (data, ticker, cota_mercado, cota_patrimonial, taxa_total_aa,
+                   duration, desconto_observado, desconto_justo, excesso_desconto)
+                VALUES
+                  (:data, :ticker, :cota_mercado, :cota_patrimonial, :taxa_total_aa,
+                   :duration, :desconto_observado, :desconto_justo, :excesso_desconto)
+            """, {**fundo, "data": row["data"]})
+
+
+def insert_fiinfra_tranche(tranche: dict, db_path=None) -> None:
+    """Registra uma tranche executada ou planejada."""
+    row = {**tranche, "data": str(tranche["data"])}
+    with _conn(db_path) as conn:
+        conn.execute("""
+            INSERT INTO fiinfra_tranches (tipo, data, ticker, qtd, preco, observacao)
+            VALUES (:tipo, :data, :ticker, :qtd, :preco, :observacao)
+        """, row)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -250,4 +388,74 @@ def load_composicao(
                 conn,
                 params=(latest,),
             )
+    return df
+
+
+def load_fiinfra_thresholds(db_path=None) -> dict:
+    """Carrega limiares da Regua FI-Infra, usando defaults quando faltar algo."""
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    with _conn(db_path) as conn:
+        rows = conn.execute("SELECT chave, valor FROM fiinfra_thresholds").fetchall()
+    thresholds.update({chave: valor for chave, valor in rows})
+    return thresholds
+
+
+def get_ultimo_fiinfra_snapshot(db_path=None) -> Optional[dict]:
+    """Retorna a foto mais recente da Regua FI-Infra."""
+    with _conn(db_path) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM fiinfra_snapshots ORDER BY data DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cursor.description]
+        return dict(zip(cols, row))
+
+
+def load_fiinfra_snapshots(days: int = 252 * 3, db_path=None) -> pd.DataFrame:
+    """Carrega historico da Regua FI-Infra, ordenado por data ASC."""
+    with _conn(db_path) as conn:
+        df = pd.read_sql(
+            "SELECT * FROM (SELECT * FROM fiinfra_snapshots ORDER BY data DESC LIMIT ?) t ORDER BY data ASC",
+            conn,
+            params=(days,),
+            parse_dates=["data"],
+        )
+    return df
+
+
+def load_fiinfra_fundos(ref_date: Optional[date] = None, db_path=None) -> pd.DataFrame:
+    """Carrega dados por fundo para uma data ou para a foto mais recente."""
+    date_str = str(ref_date) if ref_date else None
+    with _conn(db_path) as conn:
+        if date_str:
+            df = pd.read_sql(
+                "SELECT * FROM fiinfra_fundos_snapshot WHERE data = ? ORDER BY ticker",
+                conn,
+                params=(date_str,),
+            )
+        else:
+            latest = conn.execute(
+                "SELECT MAX(data) FROM fiinfra_fundos_snapshot"
+            ).fetchone()[0]
+            if not latest:
+                return pd.DataFrame()
+            df = pd.read_sql(
+                "SELECT * FROM fiinfra_fundos_snapshot WHERE data = ? ORDER BY ticker",
+                conn,
+                params=(latest,),
+            )
+    return df
+
+
+def load_fiinfra_tranches(limit: int = 100, db_path=None) -> pd.DataFrame:
+    """Carrega as tranches mais recentes."""
+    with _conn(db_path) as conn:
+        df = pd.read_sql(
+            "SELECT * FROM fiinfra_tranches ORDER BY data DESC, id DESC LIMIT ?",
+            conn,
+            params=(limit,),
+            parse_dates=["data"],
+        )
     return df
