@@ -685,7 +685,7 @@ def _quality_summary(
     issues = []
     if not collection:
         issues.append("snapshot sem lote de coleta oficial para a data")
-    issues.extend(collection.get("erros", []))
+    issues.extend(_collection_error_messages(collection.get("erros")))
     total_overrides = macro_overrides + fund_overrides
     if total_overrides:
         issues.append(f"{total_overrides} campo(s) com override manual")
@@ -798,6 +798,16 @@ def _safe_json_list(value) -> list:
     if parsed in (None, ""):
         return []
     return [parsed]
+
+
+def _collection_error_messages(erros) -> list[str]:
+    if not erros:
+        return []
+    if isinstance(erros, dict):
+        return [f"{fonte}: {mensagem}" for fonte, mensagem in erros.items()]
+    if isinstance(erros, (list, tuple, set)):
+        return [str(item) for item in erros if item]
+    return [str(erros)]
 
 
 def _render_history(thresholds: dict) -> None:
@@ -1127,7 +1137,10 @@ def _snapshot_payload(
         "data": ref_date,
         "collection_id": collection.get("collection_id"),
         "data_solicitada": collection.get("data_solicitada", ref_date),
-        "collection_errors": json.dumps(collection.get("erros", []), ensure_ascii=False),
+        "collection_errors": json.dumps(
+            _collection_error_messages(collection.get("erros")),
+            ensure_ascii=False,
+        ),
         "quality_issues": json.dumps(quality_issues or [], ensure_ascii=False),
         "metodologia_version": METODOLOGIA_VERSION,
         "cobertura_fundos": cobertura_fundos,

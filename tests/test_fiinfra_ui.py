@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 from src.fiinfra_ui import (
     _add_signal_trace,
     _apply_premissas_lote,
+    _collection_error_messages,
     _confirmar_estimativas_fundos,
     _historical_threshold,
     _json_list_summary,
@@ -122,7 +123,7 @@ class FiInfraUiTests(unittest.TestCase):
                 "ipca_focus_fonte": "BCB Focus",
                 "ipca_focus_status": "DENTRO_SLA",
             },
-            collection={"collection_id": "abc", "data_solicitada": ref, "erros": ["B3 parcial"]},
+            collection={"collection_id": "abc", "data_solicitada": ref, "erros": {"b3": "B3 parcial"}},
             quality_issues=["spread manual"],
         )
 
@@ -135,7 +136,7 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertFalse(payload["cdi_override"])
         self.assertEqual(payload["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
         self.assertEqual(payload["spread_fonte"], "manual_sem_fonte_oficial")
-        self.assertEqual(json.loads(payload["collection_errors"]), ["B3 parcial"])
+        self.assertEqual(json.loads(payload["collection_errors"]), ["b3: B3 parcial"])
         self.assertEqual(json.loads(payload["quality_issues"]), ["spread manual"])
 
     def test_confirmacao_marca_estimativas_como_confirmadas(self):
@@ -177,7 +178,7 @@ class FiInfraUiTests(unittest.TestCase):
         resumo = _quality_summary(
             auto_macro=auto_macro,
             fundos_calc=fundos,
-            collection={"erros": ["B3 parcial"]},
+            collection={"erros": {"b3": "B3 parcial"}},
             macro_values={
                 "spread": 120.0,
                 "ntnb": 7.1,
@@ -200,8 +201,13 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(resumo["total_overrides"], 3)
         self.assertEqual(resumo["estimativas"], 1)
         self.assertEqual(resumo["status_counts"]["ATUALIZADO"], 3)
-        self.assertIn("B3 parcial", resumo["issues"])
+        self.assertIn("b3: B3 parcial", resumo["issues"])
         self.assertTrue(any("revisao 2" in issue for issue in resumo["issues"]))
+
+    def test_collection_error_messages_normaliza_erros_da_coleta(self):
+        self.assertEqual(_collection_error_messages({"b3": "indisponivel"}), ["b3: indisponivel"])
+        self.assertEqual(_collection_error_messages(["CVM parcial"]), ["CVM parcial"])
+        self.assertEqual(_collection_error_messages(None), [])
 
     def test_macro_quality_rows_preserva_fonte_status_e_original(self):
         rows = _macro_quality_rows(
