@@ -638,6 +638,25 @@ def load_fiinfra_revisions(ref_date: date, db_path=None) -> pd.DataFrame:
     return df
 
 
+def restore_fiinfra_revision(revision_id: int, db_path=None) -> dict:
+    """Restaura uma revisao arquivada e arquiva o snapshot atual antes do replace."""
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT snapshot_json, fundos_json
+            FROM fiinfra_snapshot_revisions
+            WHERE id = ?
+            """,
+            (int(revision_id),),
+        ).fetchone()
+    if not row:
+        raise ValueError(f"Revisao FI-Infra nao encontrada: {revision_id}")
+    snapshot = json.loads(row[0])
+    fundos = json.loads(row[1])
+    upsert_fiinfra_snapshot(snapshot, fundos, db_path=db_path)
+    return snapshot
+
+
 def load_fiinfra_snapshots(days: int = 252 * 3, db_path=None) -> pd.DataFrame:
     """Carrega historico da Regua FI-Infra, ordenado por data ASC."""
     with _conn(db_path) as conn:

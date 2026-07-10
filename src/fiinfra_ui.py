@@ -23,6 +23,7 @@ from src.db import (
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
     load_fiinfra_tranches,
+    restore_fiinfra_revision,
     save_fiinfra_thresholds,
     upsert_fiinfra_snapshot,
 )
@@ -838,6 +839,27 @@ def _render_revisions(ref_date: date) -> None:
                 "observacao": st.column_config.TextColumn("Observacao"),
             },
         )
+        options = {
+            f"Revisao {int(row.revisao_num)} - {row.substituido_em}": int(row.id)
+            for row in revisions.itertuples(index=False)
+        }
+        selecionada = st.selectbox(
+            "Revisao para restaurar",
+            options=list(options),
+            key=f"fiinfra_restore_revision_select_{ref_date.isoformat()}",
+        )
+        confirmar = st.checkbox(
+            "Confirmo que quero substituir o snapshot atual por esta revisao.",
+            key=f"fiinfra_restore_revision_confirm_{ref_date.isoformat()}",
+        )
+        if st.button(
+            "Restaurar revisao selecionada",
+            disabled=not confirmar,
+            key=f"fiinfra_restore_revision_button_{ref_date.isoformat()}",
+        ):
+            restore_fiinfra_revision(options[selecionada])
+            st.success("Revisao restaurada. O snapshot anterior foi arquivado.")
+            st.rerun()
 
 
 def _render_tranches() -> None:
