@@ -52,6 +52,9 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(ultimo["cobertura_fundos"], 4)
         self.assertEqual(ultimo["ntnb_fonte"], "ANBIMA")
         self.assertEqual(ultimo["ntnb_override"], 1)
+        self.assertEqual(ultimo["spread_fonte"], "manual_sem_fonte_oficial")
+        self.assertEqual(ultimo["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
+        self.assertEqual(ultimo["spread_override"], 0)
         self.assertEqual(ultimo["inflacao_usada_fonte"], "focus")
         self.assertEqual(len(load_fiinfra_snapshots(db_path=self.db_path)), 1)
         fundos_salvos = load_fiinfra_fundos(date(2026, 7, 10), self.db_path)
@@ -94,6 +97,8 @@ class DbFiInfraTests(unittest.TestCase):
     @staticmethod
     def _snapshot():
         return {"data": date(2026, 7, 10), "ntnb": 6.5, "spread": 100,
+                "spread_original": None, "spread_fonte": "manual_sem_fonte_oficial",
+                "spread_status": "MANUAL_SEM_FONTE_OFICIAL", "spread_override": False,
                 "metodologia_version": "v2", "cobertura_fundos": 4,
                 "juro_real_caro_ref": 5.0, "juro_real_barato_ref": 6.5,
                 "spread_caro_ref": 50, "spread_barato_ref": 100,

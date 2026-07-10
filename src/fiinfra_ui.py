@@ -273,11 +273,13 @@ def render_regua_fiinfra() -> None:
     fundos_df = pd.DataFrame(fundos_calc)
     cobertura = sum(bool(row.get("elegivel")) for row in fundos_calc)
     macro_values = {
+        "spread": spread,
         "ntnb": ntnb,
         "cdi": cdi,
         "inflacao_implicita": inflacao_implicita,
         "ipca_focus": ipca_focus,
     }
+    spread_meta = _spread_provenance(ultimo_snapshot, spread)
     existente = get_fiinfra_snapshot(ref_date)
     revisions = load_fiinfra_revisions(ref_date)
     qualidade = _quality_summary(
@@ -285,13 +287,17 @@ def render_regua_fiinfra() -> None:
         fundos_calc=fundos_calc,
         collection=collection,
         macro_values=macro_values,
+        spread_meta=spread_meta,
         existing_snapshot=existente,
         next_revision=len(revisions) + 1,
     )
     st.caption(f"Cobertura do sinal de desconto: {cobertura}/{len(fundos_calc)} fundos válidos.")
 
     if cobertura < 3:
-        _render_quality_panel(auto_macro, macro_values, fundos_calc, collection, cobertura, qualidade)
+        _render_quality_panel(
+            auto_macro, macro_values, spread_meta, fundos_calc,
+            collection, cobertura, qualidade,
+        )
         st.warning(
             "Cobertura insuficiente para uma recomendacao operacional. "
             "Sao necessarios pelo menos 3 fundos com dados completos."
@@ -321,7 +327,10 @@ def render_regua_fiinfra() -> None:
         avaliacao,
     )
     _render_fundos_calculados(fundos_df)
-    _render_quality_panel(auto_macro, macro_values, fundos_calc, collection, cobertura, qualidade)
+    _render_quality_panel(
+        auto_macro, macro_values, spread_meta, fundos_calc,
+        collection, cobertura, qualidade,
+    )
 
     observacao = st.text_area("Observacao do snapshot", height=80)
     quality_issues = qualidade["issues"]
@@ -358,6 +367,7 @@ def render_regua_fiinfra() -> None:
             execucao=execucao,
             observacao=observacao,
             auto_macro=auto_macro,
+            spread_meta=spread_meta,
             collection=collection,
         )
         upsert_fiinfra_snapshot(snapshot, fundos_para_salvar)
@@ -596,6 +606,7 @@ def _parse_premissa_float(value) -> Optional[float]:
 def _render_quality_panel(
     auto_macro: dict,
     macro_values: dict,
+    spread_meta: dict,
     fundos_calc: list[dict],
     collection: dict,
     cobertura: int,
@@ -618,7 +629,9 @@ def _render_quality_panel(
             f"{status.get('INDISPONIVEL', 0)} indisponiveis."
         )
 
-        macro_df = pd.DataFrame(_macro_quality_rows(auto_macro, macro_values))
+        macro_df = pd.DataFrame(
+            _macro_quality_rows(auto_macro, macro_values, spread_meta=spread_meta)
+        )
         st.dataframe(
             macro_df,
             hide_index=True,
@@ -651,10 +664,11 @@ def _quality_summary(
     fundos_calc: list[dict],
     collection: dict,
     macro_values: dict,
+    spread_meta: dict,
     existing_snapshot: Optional[dict],
     next_revision: int,
 ) -> dict:
-    macro_rows = _macro_quality_rows(auto_macro, macro_values)
+    macro_rows = _macro_quality_rows(auto_macro, macro_values, spread_meta=spread_meta)
     macro_overrides = sum(int(bool(row["override"])) for row in macro_rows)
     fund_overrides = sum(
         int(bool(row.get("cota_mercado_override")))
@@ -673,6 +687,8 @@ def _quality_summary(
     total_overrides = macro_overrides + fund_overrides
     if total_overrides:
         issues.append(f"{total_overrides} campo(s) com override manual")
+    if spread_meta["status"] in {"MANUAL_SEM_FONTE_OFICIAL", "HISTORICO"}:
+        issues.append("spread IDA-Infra sem coleta oficial automatizada")
     if estimativas:
         issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
     if existing_snapshot:
@@ -691,8 +707,13 @@ def _quality_summary(
     }
 
 
-def _macro_quality_rows(auto_macro: dict, macro_values: dict) -> list[dict]:
+def _macro_quality_rows(
+    auto_macro: dict,
+    macro_values: dict,
+    spread_meta: Optional[dict] = None,
+) -> list[dict]:
     labels = {
+        "spread": "Spread IDA-Infra",
         "ntnb": "NTN-B longa",
         "cdi": "CDI",
         "inflacao_implicita": "Inflacao implicita",
@@ -706,13 +727,16 @@ def _macro_quality_rows(auto_macro: dict, macro_values: dict) -> list[dict]:
     }
     rows = []
     for key, label in labels.items():
-        meta = _field_provenance(auto_macro, key, macro_values.get(key))
+        if key == "spread":
+            meta = spread_meta or _manual_spread_meta(None, macro_values.get(key))
+        else:
+            meta = _field_provenance(auto_macro, key, macro_values.get(key))
         rows.append({
             "campo": label,
             "valor": macro_values.get(key),
             "original": meta["original"],
             "fonte": meta["fonte"],
-            "data_base": auto_macro.get(date_keys[key]),
+            "data_base": auto_macro.get(date_keys[key]) if key in date_keys else None,
             "status": meta["status"],
             "override": meta["override"],
         })
@@ -1049,10 +1073,12 @@ def _snapshot_payload(
     execucao: dict,
     observacao: str,
     auto_macro: Optional[dict] = None,
+    spread_meta: Optional[dict] = None,
     collection: Optional[dict] = None,
 ) -> dict:
     auto_macro = auto_macro or {}
     collection = collection or {}
+    spread_meta = spread_meta or _manual_spread_meta(None, spread)
     ntnb_meta = _field_provenance(auto_macro, "ntnb", ntnb)
     cdi_meta = _field_provenance(auto_macro, "cdi", cdi)
     implicita_meta = _field_provenance(auto_macro, "inflacao_implicita", inflacao_implicita)
@@ -1075,6 +1101,10 @@ def _snapshot_payload(
         "ntnb_fonte": ntnb_meta["fonte"],
         "ntnb_override": ntnb_meta["override"],
         "spread": spread,
+        "spread_original": spread_meta["original"],
+        "spread_fonte": spread_meta["fonte"],
+        "spread_status": spread_meta["status"],
+        "spread_override": spread_meta["override"],
         "excesso_mediano": excesso_mediano,
         "duration_mediana": duration_mediana,
         "zona": avaliacao["zona"],
@@ -1161,6 +1191,39 @@ def _prior_or_default(row: dict, key: str, fallback: float) -> float:
     if value is None or pd.isna(value):
         return float(fallback)
     return float(value)
+
+
+def _spread_provenance(ultimo_snapshot: Optional[dict], effective: float) -> dict:
+    if ultimo_snapshot is None:
+        return _manual_spread_meta(None, effective)
+    original = ultimo_snapshot.get("spread")
+    meta = _manual_spread_meta(original, effective)
+    if meta["override"]:
+        meta["status"] = "OVERRIDE_MANUAL"
+        meta["fonte"] = "snapshot_anterior_editado"
+    else:
+        meta["status"] = ultimo_snapshot.get("spread_status") or "HISTORICO"
+        meta["fonte"] = ultimo_snapshot.get("spread_fonte") or "snapshot_anterior"
+    return meta
+
+
+def _manual_spread_meta(original: Optional[float], effective: Optional[float]) -> dict:
+    override = False
+    if (
+        original is not None
+        and not pd.isna(original)
+        and effective is not None
+        and not pd.isna(effective)
+    ):
+        override = not math.isclose(
+            float(effective), float(original), rel_tol=1e-9, abs_tol=1e-9
+        )
+    return {
+        "original": original,
+        "override": override,
+        "fonte": "manual_sem_fonte_oficial",
+        "status": "OVERRIDE_MANUAL" if override else "MANUAL_SEM_FONTE_OFICIAL",
+    }
 
 
 def _field_provenance(auto: dict, key: str, effective: float) -> dict:

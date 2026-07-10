@@ -124,6 +124,10 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     ntnb_fonte                TEXT,
     ntnb_override             INTEGER DEFAULT 0,
     spread                    REAL,
+    spread_original           REAL,
+    spread_fonte              TEXT,
+    spread_status             TEXT,
+    spread_override           INTEGER DEFAULT 0,
     excesso_mediano           REAL,
     duration_mediana          REAL,
     zona                      TEXT,
@@ -287,6 +291,8 @@ def init_db_fiinfra(db_path=None) -> None:
             "juro_real_caro_ref": "REAL", "juro_real_barato_ref": "REAL",
             "spread_caro_ref": "REAL", "spread_barato_ref": "REAL",
             "excesso_caro_ref": "REAL", "excesso_barato_ref": "REAL",
+            "spread_original": "REAL", "spread_fonte": "TEXT",
+            "spread_status": "TEXT", "spread_override": "INTEGER DEFAULT 0",
         })
         _ensure_columns(conn, "fiinfra_fundos_snapshot", {
             "cnpj": "TEXT", "cota_mercado_original": "REAL",
@@ -396,6 +402,7 @@ def upsert_fiinfra_snapshot(
         "metodologia_version", "cobertura_fundos", "juro_real_caro_ref",
         "juro_real_barato_ref", "spread_caro_ref", "spread_barato_ref",
         "excesso_caro_ref", "excesso_barato_ref",
+        "spread_original", "spread_fonte", "spread_status", "spread_override",
     ):
         row.setdefault(key, None)
     for key in (
@@ -405,7 +412,10 @@ def upsert_fiinfra_snapshot(
     ):
         if row[key] is not None:
             row[key] = str(row[key])
-    for key in ("ntnb_override", "cdi_override", "inflacao_override", "ipca_focus_override"):
+    for key in (
+        "ntnb_override", "spread_override", "cdi_override",
+        "inflacao_override", "ipca_focus_override",
+    ):
         row[key] = int(bool(row[key]))
 
     with _conn(db_path) as conn:
@@ -416,7 +426,8 @@ def upsert_fiinfra_snapshot(
                cobertura_fundos, juro_real_caro_ref, juro_real_barato_ref,
                spread_caro_ref, spread_barato_ref, excesso_caro_ref, excesso_barato_ref,
                ntnb, ntnb_original, ntnb_fonte, ntnb_override,
-               spread, excesso_mediano, duration_mediana, zona,
+               spread, spread_original, spread_fonte, spread_status, spread_override,
+               excesso_mediano, duration_mediana, zona,
                juro_estado, spread_estado, excesso_estado,
                juro_pos, spread_pos, excesso_pos, mandato,
                cdi, cdi_original, cdi_fonte, cdi_override, aliquota,
@@ -433,7 +444,8 @@ def upsert_fiinfra_snapshot(
                :cobertura_fundos, :juro_real_caro_ref, :juro_real_barato_ref,
                :spread_caro_ref, :spread_barato_ref, :excesso_caro_ref, :excesso_barato_ref,
                :ntnb, :ntnb_original, :ntnb_fonte, :ntnb_override,
-               :spread, :excesso_mediano, :duration_mediana, :zona,
+               :spread, :spread_original, :spread_fonte, :spread_status, :spread_override,
+               :excesso_mediano, :duration_mediana, :zona,
                :juro_estado, :spread_estado, :excesso_estado,
                :juro_pos, :spread_pos, :excesso_pos, :mandato,
                :cdi, :cdi_original, :cdi_fonte, :cdi_override, :aliquota,

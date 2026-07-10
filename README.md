@@ -70,7 +70,9 @@ salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
 
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
-estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e
+estruturada com cobertura e periodicidade uniformes. O spread fica auditado no
+snapshot com fonte, status, valor original e override, e aparece no painel de
+qualidade como premissa sem coleta oficial automatizada. O ultimo valor salvo e
 reutilizado como fallback. A taxa total e a duration tambem podem ser
 atualizadas em lote por CSV/clipboard na tela da regua; valores aplicados por
 esse caminho ficam com status `IMPORTADO_LOTE`. Quando taxa ou duration ainda

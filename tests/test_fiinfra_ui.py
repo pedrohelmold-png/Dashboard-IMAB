@@ -130,6 +130,8 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(payload["ntnb_original"], 7.0)
         self.assertTrue(payload["ntnb_override"])
         self.assertFalse(payload["cdi_override"])
+        self.assertEqual(payload["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
+        self.assertEqual(payload["spread_fonte"], "manual_sem_fonte_oficial")
 
     def test_confirmacao_marca_estimativas_como_confirmadas(self):
         fundos = [{
@@ -172,18 +174,25 @@ class FiInfraUiTests(unittest.TestCase):
             fundos_calc=fundos,
             collection={"erros": ["B3 parcial"]},
             macro_values={
+                "spread": 120.0,
                 "ntnb": 7.1,
                 "cdi": 14.0,
                 "inflacao_implicita": 6.0,
                 "ipca_focus": 4.5,
             },
+            spread_meta={
+                "original": 100.0,
+                "fonte": "snapshot_anterior_editado",
+                "status": "OVERRIDE_MANUAL",
+                "override": True,
+            },
             existing_snapshot={"data": "2026-07-10"},
             next_revision=2,
         )
 
-        self.assertEqual(resumo["macro_overrides"], 1)
+        self.assertEqual(resumo["macro_overrides"], 2)
         self.assertEqual(resumo["fund_overrides"], 1)
-        self.assertEqual(resumo["total_overrides"], 2)
+        self.assertEqual(resumo["total_overrides"], 3)
         self.assertEqual(resumo["estimativas"], 1)
         self.assertEqual(resumo["status_counts"]["ATUALIZADO"], 3)
         self.assertIn("B3 parcial", resumo["issues"])
@@ -194,12 +203,14 @@ class FiInfraUiTests(unittest.TestCase):
             {"ntnb": 7.0, "ntnb_fonte": "ANBIMA", "ntnb_status": "ATUALIZADO"},
             {"ntnb": 7.1, "cdi": 14.0, "inflacao_implicita": 6.0, "ipca_focus": 4.5},
         )
+        ntnb = next(row for row in rows if row["campo"] == "NTN-B longa")
+        spread = next(row for row in rows if row["campo"] == "Spread IDA-Infra")
 
-        self.assertEqual(rows[0]["campo"], "NTN-B longa")
-        self.assertEqual(rows[0]["original"], 7.0)
-        self.assertEqual(rows[0]["fonte"], "ANBIMA")
-        self.assertEqual(rows[0]["status"], "OVERRIDE_MANUAL")
-        self.assertTrue(rows[0]["override"])
+        self.assertEqual(ntnb["original"], 7.0)
+        self.assertEqual(ntnb["fonte"], "ANBIMA")
+        self.assertEqual(ntnb["status"], "OVERRIDE_MANUAL")
+        self.assertTrue(ntnb["override"])
+        self.assertEqual(spread["status"], "MANUAL_SEM_FONTE_OFICIAL")
 
     def test_premissas_lote_atualiza_taxa_duration_e_status(self):
         base = pd.DataFrame([
