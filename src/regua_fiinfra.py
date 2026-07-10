@@ -38,6 +38,8 @@ ESTADO_BARATO = "BARATO"
 ESTADO_NEUTRO = "NEUTRO"
 ESTADO_CARO = "CARO"
 
+METODOLOGIA_VERSION = "v2"
+
 
 def validar_thresholds(thresholds: Optional[dict] = None) -> dict:
     """Combina e valida limiares, exigindo ``caro < barato`` em cada sinal."""
@@ -241,27 +243,62 @@ def calcular_yield_fundo_real(
     excesso_desconto: float,
     duration: Optional[float],
 ) -> Optional[float]:
-    """Aproxima o yield real do fundo em % a.a."""
+    """Aproxima o yield real isento do fundo em % a.a."""
     if ntnb is None or spread_bps is None:
         return None
     premio_desconto = 0.0
     if duration is not None and duration > 0 and excesso_desconto is not None:
-        premio_desconto = max(0.0, excesso_desconto) / duration
+        premio_desconto = excesso_desconto / duration
     return ntnb + spread_bps / 100 + premio_desconto
 
 
-def calcular_cdi_liquido_real(cdi: float, aliquota: float, inflacao_implicita: float) -> Optional[float]:
+def calcular_cdi_liquido_real(cdi: float, aliquota: float, inflacao: float) -> Optional[float]:
     """Calcula CDI liquido deflacionado em % a.a."""
-    if cdi is None or inflacao_implicita is None:
+    return calcular_retorno_real_liquido_nominal(cdi, aliquota, inflacao)
+
+
+def calcular_retorno_real_liquido_nominal(
+    retorno_nominal: float,
+    aliquota: float,
+    inflacao: float,
+) -> Optional[float]:
+    """Calcula retorno nominal tributado e deflacionado em % a.a."""
+    if retorno_nominal is None or inflacao is None:
         return None
+    _validar_aliquota_e_inflacao(aliquota, inflacao)
+    retorno_nominal_decimal = retorno_nominal / 100
+    inflacao_decimal = inflacao / 100
+    liquido = ((1 + retorno_nominal_decimal * (1 - aliquota)) / (1 + inflacao_decimal)) - 1
+    return liquido * 100
+
+
+def calcular_retorno_real_liquido_de_taxa_real(
+    taxa_real: float,
+    aliquota: float,
+    inflacao: float,
+) -> Optional[float]:
+    """
+    Calcula o retorno real liquido de uma alternativa cotada como taxa real.
+
+    Primeiro reconstrui o retorno nominal implicito pela taxa real e pela
+    inflacao usada no snapshot; depois aplica imposto sobre o retorno nominal.
+    """
+    if taxa_real is None or inflacao is None:
+        return None
+    _validar_aliquota_e_inflacao(aliquota, inflacao)
+    if taxa_real <= -100:
+        raise ValueError("A taxa real precisa ser maior que -100%.")
+    taxa_real_decimal = taxa_real / 100
+    inflacao_decimal = inflacao / 100
+    retorno_nominal = ((1 + taxa_real_decimal) * (1 + inflacao_decimal) - 1) * 100
+    return calcular_retorno_real_liquido_nominal(retorno_nominal, aliquota, inflacao)
+
+
+def _validar_aliquota_e_inflacao(aliquota: float, inflacao: float) -> None:
     if aliquota is None or not 0 <= aliquota <= 1:
         raise ValueError("A aliquota precisa estar entre 0 e 1.")
-    if inflacao_implicita <= -100:
-        raise ValueError("A inflacao implicita precisa ser maior que -100%.")
-    cdi_decimal = cdi / 100
-    inflacao_decimal = inflacao_implicita / 100
-    liquido = ((1 + cdi_decimal * (1 - aliquota)) / (1 + inflacao_decimal)) - 1
-    return liquido * 100
+    if inflacao <= -100:
+        raise ValueError("A inflacao precisa ser maior que -100%.")
 
 
 def recomendar_execucao(

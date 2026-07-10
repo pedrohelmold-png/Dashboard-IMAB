@@ -14,6 +14,7 @@ from src.regua_fiinfra import (
     avaliar_sinais,
     calcular_cdi_liquido_real,
     calcular_desconto_observado,
+    calcular_retorno_real_liquido_de_taxa_real,
     calcular_yield_fundo_real,
     classificar_posicao,
     normalizar_sinal,
@@ -90,10 +91,20 @@ class ReguaFiInfraTests(unittest.TestCase):
 
     def test_carry_e_cdi_real(self):
         self.assertAlmostEqual(calcular_yield_fundo_real(6.0, 100, 4.0, 8.0), 7.5)
+        self.assertAlmostEqual(calcular_yield_fundo_real(6.0, 100, -4.0, 8.0), 6.5)
         esperado = ((1 + 0.12 * 0.85) / 1.05 - 1) * 100
         self.assertAlmostEqual(calcular_cdi_liquido_real(12, 0.15, 5), esperado)
         with self.assertRaises(ValueError):
             calcular_cdi_liquido_real(12, 1.5, 5)
+
+    def test_alternativa_real_liquida_taxa_imab_usa_retorno_nominal_implicito(self):
+        retorno = calcular_retorno_real_liquido_de_taxa_real(6.0, 0.15, 5.0)
+        nominal_implicito = (1.06 * 1.05) - 1
+        esperado = ((1 + nominal_implicito * 0.85) / 1.05 - 1) * 100
+        self.assertAlmostEqual(retorno, esperado)
+        self.assertNotAlmostEqual(retorno, 6.0 * 0.85)
+        with self.assertRaises(ValueError):
+            calcular_retorno_real_liquido_de_taxa_real(-100, 0.15, 5.0)
 
     def test_recomendacao_respeita_mandato_e_filtro_de_carrego(self):
         compra = recomendar_execucao(ZONA_COMPRAR, MANDATO_CAIXA, 8, 6)

@@ -28,6 +28,7 @@ from src.regua_fiinfra import (
     ESTADO_CARO,
     ESTADO_NEUTRO,
     FUNDOS_PADRAO,
+    METODOLOGIA_VERSION,
     MANDATO_CAIXA,
     MANDATO_JURO_REAL,
     MANDATO_RENDA,
@@ -37,6 +38,7 @@ from src.regua_fiinfra import (
     ZONA_REDUZIR,
     avaliar_sinais,
     calcular_cdi_liquido_real,
+    calcular_retorno_real_liquido_de_taxa_real,
     calcular_yield_fundo_real,
     preparar_fundos,
     recomendar_execucao,
@@ -222,7 +224,13 @@ def render_regua_fiinfra() -> None:
             format="%.2f",
             key=f"fiinfra_imab_{collection_id}",
         )
-        alternativa_liquida_real = imab_real * (1 - aliquota)
+        alternativa_liquida_real = calcular_retorno_real_liquido_de_taxa_real(
+            imab_real, aliquota, inflacao_usada
+        )
+        st.caption(
+            "Alternativa IMA-B: taxa real bruta convertida para retorno nominal "
+            "pela inflacao usada, tributada e deflacionada de volta."
+        )
     else:
         alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_usada)
 
@@ -703,7 +711,7 @@ def _snapshot_payload(
         "data": ref_date,
         "collection_id": collection.get("collection_id"),
         "data_solicitada": collection.get("data_solicitada", ref_date),
-        "metodologia_version": "v1",
+        "metodologia_version": METODOLOGIA_VERSION,
         "cobertura_fundos": cobertura_fundos,
         "juro_real_caro_ref": thresholds.get("juro_real_caro"),
         "juro_real_barato_ref": thresholds.get("juro_real_barato"),

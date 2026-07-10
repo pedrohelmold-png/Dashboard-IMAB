@@ -46,7 +46,7 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(ultimo["observacao"], "revisado")
         self.assertEqual(ultimo["venda_bloqueada"], 0)
         self.assertIn("ntnb_status", ultimo)
-        self.assertEqual(ultimo["metodologia_version"], "v1")
+        self.assertEqual(ultimo["metodologia_version"], "v2")
         self.assertEqual(ultimo["cobertura_fundos"], 4)
         self.assertEqual(ultimo["ntnb_fonte"], "ANBIMA")
         self.assertEqual(ultimo["ntnb_override"], 1)
@@ -78,7 +78,7 @@ class DbFiInfraTests(unittest.TestCase):
     @staticmethod
     def _snapshot():
         return {"data": date(2026, 7, 10), "ntnb": 6.5, "spread": 100,
-                "metodologia_version": "v1", "cobertura_fundos": 4,
+                "metodologia_version": "v2", "cobertura_fundos": 4,
                 "juro_real_caro_ref": 5.0, "juro_real_barato_ref": 6.5,
                 "spread_caro_ref": 50, "spread_barato_ref": 100,
                 "excesso_caro_ref": 0, "excesso_barato_ref": 3,

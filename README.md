@@ -33,6 +33,12 @@ A inflacao implicita da NTN-B de referencia permanece separada como breakeven
 de mercado e funciona apenas como fallback explicitamente identificado se o
 Focus estiver indisponivel.
 
+A metodologia atual da regua e `v2`. O yield real estimado do fundo soma NTN-B,
+spread e o excesso de desconto anualizado pela duration; excesso negativo reduz
+o yield, em vez de ser zerado. Para alternativas tributadas cotadas como taxa
+real, como IMA-B, a regua reconstrui o retorno nominal implicito pela inflacao
+usada, aplica imposto sobre esse retorno nominal e deflaciona de volta.
+
 Cada atualizacao forma um lote vinculado a data solicitada. Mudar a data
 invalida o lote anterior, e o botao forca nova leitura das fontes mesmo com o
 servidor aberto ha varios dias. B3 e CVM sao tratadas independentemente para

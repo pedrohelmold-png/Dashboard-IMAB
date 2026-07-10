@@ -113,7 +113,7 @@ class FiInfraUiTests(unittest.TestCase):
             collection={"collection_id": "abc", "data_solicitada": ref},
         )
 
-        self.assertEqual(payload["metodologia_version"], "v1")
+        self.assertEqual(payload["metodologia_version"], "v2")
         self.assertEqual(payload["cobertura_fundos"], 4)
         self.assertEqual(payload["juro_real_barato_ref"], avaliacao["thresholds"]["juro_real_barato"])
         self.assertEqual(payload["collection_id"], "abc")
