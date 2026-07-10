@@ -67,6 +67,8 @@ util. Alteracoes manuais nas cotas sao marcadas como override.
 O painel **Qualidade dos dados** consolida lote de coleta, cobertura, status
 das fontes, overrides, estimativas e pontos que exigem revisao antes do
 salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
+Erros de coleta e pontos confirmados na revisao ficam gravados no snapshot em
+JSON para auditoria posterior.
 
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte

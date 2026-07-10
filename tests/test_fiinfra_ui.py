@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import json
 import unittest
 from unittest.mock import patch
 
@@ -120,7 +121,8 @@ class FiInfraUiTests(unittest.TestCase):
                 "ipca_focus_fonte": "BCB Focus",
                 "ipca_focus_status": "DENTRO_SLA",
             },
-            collection={"collection_id": "abc", "data_solicitada": ref},
+            collection={"collection_id": "abc", "data_solicitada": ref, "erros": ["B3 parcial"]},
+            quality_issues=["spread manual"],
         )
 
         self.assertEqual(payload["metodologia_version"], "v2")
@@ -132,6 +134,8 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertFalse(payload["cdi_override"])
         self.assertEqual(payload["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
         self.assertEqual(payload["spread_fonte"], "manual_sem_fonte_oficial")
+        self.assertEqual(json.loads(payload["collection_errors"]), ["B3 parcial"])
+        self.assertEqual(json.loads(payload["quality_issues"]), ["spread manual"])
 
     def test_confirmacao_marca_estimativas_como_confirmadas(self):
         fundos = [{

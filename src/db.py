@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     data                      TEXT PRIMARY KEY,
     collection_id             TEXT,
     data_solicitada           TEXT,
+    collection_errors         TEXT,
+    quality_issues            TEXT,
     metodologia_version       TEXT,
     cobertura_fundos          INTEGER,
     juro_real_caro_ref        REAL,
@@ -280,6 +282,7 @@ def init_db_fiinfra(db_path=None) -> None:
             "ipca_focus_status": "TEXT", "inflacao_usada": "REAL",
             "inflacao_usada_fonte": "TEXT",
             "collection_id": "TEXT", "data_solicitada": "TEXT",
+            "collection_errors": "TEXT", "quality_issues": "TEXT",
             "ntnb_original": "REAL", "ntnb_fonte": "TEXT",
             "ntnb_override": "INTEGER DEFAULT 0", "cdi_original": "REAL",
             "cdi_fonte": "TEXT", "cdi_override": "INTEGER DEFAULT 0",
@@ -395,7 +398,8 @@ def upsert_fiinfra_snapshot(
         "cdi_data", "cdi_status", "inflacao_data", "inflacao_status", "coletado_em",
         "ipca_focus", "ipca_focus_data", "ipca_focus_status",
         "inflacao_usada", "inflacao_usada_fonte",
-        "collection_id", "data_solicitada", "ntnb_original", "ntnb_fonte",
+        "collection_id", "data_solicitada", "collection_errors", "quality_issues",
+        "ntnb_original", "ntnb_fonte",
         "ntnb_override", "cdi_original", "cdi_fonte", "cdi_override",
         "inflacao_original", "inflacao_fonte", "inflacao_override",
         "ipca_focus_original", "ipca_focus_fonte", "ipca_focus_override",
@@ -422,7 +426,8 @@ def upsert_fiinfra_snapshot(
         _archive_fiinfra_revision(conn, row["data"])
         conn.execute("""
             INSERT OR REPLACE INTO fiinfra_snapshots
-              (data, collection_id, data_solicitada, metodologia_version,
+              (data, collection_id, data_solicitada, collection_errors, quality_issues,
+               metodologia_version,
                cobertura_fundos, juro_real_caro_ref, juro_real_barato_ref,
                spread_caro_ref, spread_barato_ref, excesso_caro_ref, excesso_barato_ref,
                ntnb, ntnb_original, ntnb_fonte, ntnb_override,
@@ -440,7 +445,8 @@ def upsert_fiinfra_snapshot(
                ntnb_vencimento, ntnb_duration_ref, ntnb_data, ntnb_status,
                cdi_data, cdi_status, inflacao_data, inflacao_status, coletado_em)
             VALUES
-              (:data, :collection_id, :data_solicitada, :metodologia_version,
+              (:data, :collection_id, :data_solicitada, :collection_errors, :quality_issues,
+               :metodologia_version,
                :cobertura_fundos, :juro_real_caro_ref, :juro_real_barato_ref,
                :spread_caro_ref, :spread_barato_ref, :excesso_caro_ref, :excesso_barato_ref,
                :ntnb, :ntnb_original, :ntnb_fonte, :ntnb_override,

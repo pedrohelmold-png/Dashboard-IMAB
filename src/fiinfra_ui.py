@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import io
+import json
 import math
 import re
 from typing import Optional
@@ -369,6 +370,7 @@ def render_regua_fiinfra() -> None:
             auto_macro=auto_macro,
             spread_meta=spread_meta,
             collection=collection,
+            quality_issues=quality_issues,
         )
         upsert_fiinfra_snapshot(snapshot, fundos_para_salvar)
         st.success("Snapshot FI-Infra salvo.")
@@ -1075,6 +1077,7 @@ def _snapshot_payload(
     auto_macro: Optional[dict] = None,
     spread_meta: Optional[dict] = None,
     collection: Optional[dict] = None,
+    quality_issues: Optional[list[str]] = None,
 ) -> dict:
     auto_macro = auto_macro or {}
     collection = collection or {}
@@ -1088,6 +1091,8 @@ def _snapshot_payload(
         "data": ref_date,
         "collection_id": collection.get("collection_id"),
         "data_solicitada": collection.get("data_solicitada", ref_date),
+        "collection_errors": json.dumps(collection.get("erros", []), ensure_ascii=False),
+        "quality_issues": json.dumps(quality_issues or [], ensure_ascii=False),
         "metodologia_version": METODOLOGIA_VERSION,
         "cobertura_fundos": cobertura_fundos,
         "juro_real_caro_ref": thresholds.get("juro_real_caro"),
