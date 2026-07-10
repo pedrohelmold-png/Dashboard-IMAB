@@ -63,6 +63,7 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(ultimo["spread_fonte"], "manual_sem_fonte_oficial")
         self.assertEqual(ultimo["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
         self.assertEqual(ultimo["spread_override"], 0)
+        self.assertIn("B3 COTAHIST 2026", ultimo["collection_sources"])
         self.assertEqual(ultimo["collection_errors"], '["B3 parcial"]')
         self.assertIn("spread manual", ultimo["quality_issues"])
         self.assertEqual(ultimo["inflacao_usada_fonte"], "focus")
@@ -107,6 +108,7 @@ class DbFiInfraTests(unittest.TestCase):
     @staticmethod
     def _snapshot():
         return {"data": date(2026, 7, 10), "ntnb": 6.5, "spread": 100,
+                "collection_sources": '{"b3": ["B3 COTAHIST 2026"]}',
                 "collection_errors": '["B3 parcial"]',
                 "quality_issues": '["spread manual"]',
                 "spread_original": None, "spread_fonte": "manual_sem_fonte_oficial",

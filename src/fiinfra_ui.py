@@ -110,6 +110,7 @@ def render_regua_fiinfra() -> None:
                 batch["erros"].append(f"macro: {exc}")
             fundos_result = fetch_fiinfra_fundos_result(ref_date, force_refresh=True)
             batch["fundos"] = fundos_result["fundos"]
+            batch["fontes_tentadas"] = fundos_result.get("fontes_tentadas", {})
             batch["erros"].extend(
                 f"{fonte}: {erro}" for fonte, erro in fundos_result["erros"].items()
             )
@@ -121,7 +122,12 @@ def render_regua_fiinfra() -> None:
     auto_fundos = collection.get("fundos", [])
     collection_id = collection.get("collection_id", f"manual_{ref_date.isoformat()}")
     if collection:
-        _render_update_result(auto_macro, auto_fundos, collection.get("erros", []))
+        _render_update_result(
+            auto_macro,
+            auto_fundos,
+            collection.get("erros", []),
+            collection.get("fontes_tentadas"),
+        )
     input_cols = st.columns([1, 1, 1, 1])
     with input_cols[0]:
         ntnb = st.number_input(
@@ -869,9 +875,11 @@ def _render_history(thresholds: dict) -> None:
     history_columns = [
         "data", "ntnb", "spread", "excesso_mediano", "ipca_focus",
         "inflacao_implicita", "inflacao_usada_fonte", "zona", "acao", "destino",
-        "metodologia_version", "alertas_qualidade", "erros_coleta",
+        "metodologia_version", "fontes_coleta", "alertas_qualidade", "erros_coleta",
     ]
     hist = hist.copy()
+    if "collection_sources" in hist.columns:
+        hist["fontes_coleta"] = hist["collection_sources"].apply(_sources_summary)
     if "quality_issues" in hist.columns:
         hist["alertas_qualidade"] = hist["quality_issues"].apply(_json_list_summary)
     if "collection_errors" in hist.columns:
@@ -896,6 +904,9 @@ def _render_revisions(ref_date: date) -> None:
         display["erros_coleta"] = revisions["snapshot_json"].apply(
             lambda value: _json_list_summary(json.loads(value).get("collection_errors"))
         )
+        display["fontes_coleta"] = revisions["snapshot_json"].apply(
+            lambda value: _sources_summary(json.loads(value).get("collection_sources"))
+        )
         st.dataframe(
             display,
             hide_index=True,
@@ -907,6 +918,7 @@ def _render_revisions(ref_date: date) -> None:
                 "metodologia_version": st.column_config.TextColumn("Metodologia"),
                 "fundos_count": st.column_config.NumberColumn("Fundos", format="%d"),
                 "observacao": st.column_config.TextColumn("Observacao"),
+                "fontes_coleta": st.column_config.TextColumn("Fontes coleta"),
                 "alertas_qualidade": st.column_config.TextColumn("Alertas"),
                 "erros_coleta": st.column_config.TextColumn("Erros coleta"),
             },
@@ -1137,6 +1149,10 @@ def _snapshot_payload(
         "data": ref_date,
         "collection_id": collection.get("collection_id"),
         "data_solicitada": collection.get("data_solicitada", ref_date),
+        "collection_sources": json.dumps(
+            collection.get("fontes_tentadas", {}),
+            ensure_ascii=False,
+        ),
         "collection_errors": json.dumps(
             _collection_error_messages(collection.get("erros")),
             ensure_ascii=False,
@@ -1321,7 +1337,12 @@ def _duration_alvo() -> Optional[float]:
     return float(values.median()) if not values.empty else 8.0
 
 
-def _render_update_result(macro: dict, fundos: list[dict], erros: list[str]) -> None:
+def _render_update_result(
+    macro: dict,
+    fundos: list[dict],
+    erros: list[str],
+    fontes_tentadas: Optional[dict] = None,
+) -> None:
     statuses = [
         macro.get("ntnb_status", "INDISPONIVEL"),
         macro.get("cdi_status", "INDISPONIVEL"),
@@ -1346,6 +1367,26 @@ def _render_update_result(macro: dict, fundos: list[dict], erros: list[str]) -> 
         st.warning(mensagem + detalhe)
     else:
         st.success(mensagem)
+    fontes = _sources_summary(fontes_tentadas)
+    if fontes:
+        st.caption("Fontes tentadas: " + fontes)
+
+
+def _sources_summary(fontes_tentadas: Optional[dict]) -> str:
+    if not fontes_tentadas:
+        return ""
+    if isinstance(fontes_tentadas, str):
+        try:
+            fontes_tentadas = json.loads(fontes_tentadas)
+        except json.JSONDecodeError:
+            return fontes_tentadas
+    if not isinstance(fontes_tentadas, dict):
+        return str(fontes_tentadas)
+    partes = []
+    for fonte, candidatos in fontes_tentadas.items():
+        if candidatos:
+            partes.append(f"{fonte.upper()}: {', '.join(map(str, candidatos))}")
+    return " | ".join(partes)
 
 
 def _ultimo_imab_value(row: Optional[dict], key: str, fallback: float) -> float:

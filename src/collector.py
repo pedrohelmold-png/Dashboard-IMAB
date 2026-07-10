@@ -461,6 +461,16 @@ def fetch_fiinfra_fundos_result(
 ) -> dict:
     """Coleta B3 e CVM de forma independente, preservando resultados parciais."""
     fundos = fundos or FIINFRA_FUNDOS
+    fontes_tentadas = {
+        "b3": [
+            f"B3 COTAHIST {year}"
+            for year in _candidate_years(ref_date, lookback_business_days=10)
+        ],
+        "cvm": [
+            f"CVM Informe Diario {year}-{month:02d}"
+            for year, month in _candidate_months(ref_date, lookback_business_days=10)
+        ],
+    }
     erros = {}
     try:
         mercado = fetch_cotacoes_b3(
@@ -494,7 +504,12 @@ def fetch_fiinfra_fundos_result(
             patrimonial.get(ticker, {}).get("data"), ref_date, max_business_days=2
         ),
     } for ticker, cnpj in fundos.items()]
-    return {"fundos": rows, "erros": erros, "data_solicitada": ref_date}
+    return {
+        "fundos": rows,
+        "erros": erros,
+        "data_solicitada": ref_date,
+        "fontes_tentadas": fontes_tentadas,
+    }
 
 
 def _download_zip(

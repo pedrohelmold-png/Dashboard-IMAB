@@ -69,6 +69,8 @@ das fontes, overrides, estimativas e pontos que exigem revisao antes do
 salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
 Erros de coleta e pontos confirmados na revisao ficam gravados no snapshot em
 JSON para auditoria posterior.
+O lote tambem registra as fontes candidatas tentadas na coleta B3/CVM, o que
+ajuda a explicar recuos para ano ou mes anterior em viradas de calendario.
 O SQLite tambem registra metadados de schema da regua (`schema_name` e
 `schema_version`), facilitando diagnostico quando um banco antigo for reaberto.
 

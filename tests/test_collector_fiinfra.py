@@ -192,6 +192,8 @@ class CollectorFiInfraTests(unittest.TestCase):
             date(2026, 7, 10), fundos={"IFRA11": FIINFRA_FUNDOS["IFRA11"]}
         )
         self.assertIn("b3", result["erros"])
+        self.assertIn("B3 COTAHIST 2026", result["fontes_tentadas"]["b3"])
+        self.assertIn("CVM Informe Diario 2026-07", result["fontes_tentadas"]["cvm"])
         self.assertIsNone(result["fundos"][0]["cota_mercado"])
         self.assertEqual(result["fundos"][0]["cota_patrimonial"], 95.0)
 

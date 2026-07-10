@@ -17,6 +17,7 @@ from src.fiinfra_ui import (
     _macro_quality_rows,
     _quality_summary,
     _snapshot_payload,
+    _sources_summary,
 )
 from src.regua_fiinfra import avaliar_sinais
 
@@ -123,7 +124,12 @@ class FiInfraUiTests(unittest.TestCase):
                 "ipca_focus_fonte": "BCB Focus",
                 "ipca_focus_status": "DENTRO_SLA",
             },
-            collection={"collection_id": "abc", "data_solicitada": ref, "erros": {"b3": "B3 parcial"}},
+            collection={
+                "collection_id": "abc",
+                "data_solicitada": ref,
+                "fontes_tentadas": {"b3": ["B3 COTAHIST 2026"]},
+                "erros": {"b3": "B3 parcial"},
+            },
             quality_issues=["spread manual"],
         )
 
@@ -136,6 +142,7 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertFalse(payload["cdi_override"])
         self.assertEqual(payload["spread_status"], "MANUAL_SEM_FONTE_OFICIAL")
         self.assertEqual(payload["spread_fonte"], "manual_sem_fonte_oficial")
+        self.assertEqual(json.loads(payload["collection_sources"]), {"b3": ["B3 COTAHIST 2026"]})
         self.assertEqual(json.loads(payload["collection_errors"]), ["b3: B3 parcial"])
         self.assertEqual(json.loads(payload["quality_issues"]), ["spread manual"])
 
@@ -227,6 +234,14 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(_json_list_summary('["B3 parcial", "spread manual"]'), "B3 parcial | spread manual")
         self.assertEqual(_json_list_summary(None), "")
         self.assertEqual(_json_list_summary("texto legado"), "texto legado")
+
+    def test_sources_summary_formata_fontes_tentadas(self):
+        fontes = {"b3": ["B3 COTAHIST 2026"], "cvm": ["CVM Informe Diario 2026-07"]}
+        self.assertEqual(
+            _sources_summary(fontes),
+            "B3: B3 COTAHIST 2026 | CVM: CVM Informe Diario 2026-07",
+        )
+        self.assertEqual(_sources_summary(json.dumps(fontes)), _sources_summary(fontes))
 
     def test_premissas_lote_atualiza_taxa_duration_e_status(self):
         base = pd.DataFrame([
