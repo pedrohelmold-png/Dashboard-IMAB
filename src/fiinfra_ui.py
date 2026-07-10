@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import io
 import math
+import re
 from typing import Optional
 from uuid import uuid4
 
@@ -237,6 +239,7 @@ def render_regua_fiinfra() -> None:
 
     st.subheader("Fundos monitorados")
     fundos_base = _fundos_base(auto_fundos)
+    fundos_base = _render_premissas_lote(fundos_base, collection_id)
     fundos_editados = st.data_editor(
         fundos_base,
         hide_index=True,
@@ -485,6 +488,108 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
             "cota_patrimonial_override": st.column_config.CheckboxColumn("Override patrimonial"),
         },
     )
+
+
+def _render_premissas_lote(fundos_base: pd.DataFrame, collection_id: str) -> pd.DataFrame:
+    with st.expander("Premissas taxa/duration em lote", expanded=False):
+        st.caption(
+            "Cole CSV com colunas ticker, taxa_total_aa e duration. "
+            "Separador virgula ou ponto-e-virgula; aceita decimal com virgula."
+        )
+        texto = st.text_area(
+            "Premissas em lote",
+            height=110,
+            placeholder="ticker;taxa_total_aa;duration\nIFRA11;0,50;8,0",
+            key=f"fiinfra_premissas_lote_{collection_id}",
+        )
+        if not texto.strip():
+            return fundos_base
+        atualizados, mensagens = _apply_premissas_lote(fundos_base, texto)
+        for mensagem in mensagens:
+            if mensagem.startswith("Aplicado"):
+                st.success(mensagem)
+            else:
+                st.warning(mensagem)
+        return atualizados
+
+
+def _apply_premissas_lote(fundos_base: pd.DataFrame, texto: str) -> tuple[pd.DataFrame, list[str]]:
+    result = fundos_base.copy()
+    mensagens = []
+    try:
+        raw = pd.read_csv(io.StringIO(texto.strip()), sep=None, engine="python", dtype=str)
+    except Exception as exc:
+        return result, [f"Nao foi possivel ler as premissas em lote: {exc}"]
+
+    raw = _normalizar_colunas_premissas(raw)
+    required = {"ticker", "taxa_total_aa", "duration"}
+    missing = sorted(required - set(raw.columns))
+    if missing:
+        return result, ["Colunas obrigatorias ausentes: " + ", ".join(missing)]
+
+    tickers_validos = set(result["ticker"].astype(str).str.upper())
+    aplicados = 0
+    for _, row in raw.iterrows():
+        ticker = str(row.get("ticker", "")).upper().strip()
+        if ticker not in tickers_validos:
+            mensagens.append(f"Ticker ignorado: {ticker or 'vazio'}")
+            continue
+        taxa = _parse_premissa_float(row.get("taxa_total_aa"))
+        duration = _parse_premissa_float(row.get("duration"))
+        if taxa is None or not 0 <= taxa <= 5:
+            mensagens.append(f"Taxa invalida para {ticker}: {row.get('taxa_total_aa')}")
+            continue
+        if duration is None or not 0 < duration <= 30:
+            mensagens.append(f"Duration invalida para {ticker}: {row.get('duration')}")
+            continue
+        mask = result["ticker"].astype(str).str.upper() == ticker
+        result.loc[mask, "taxa_total_aa"] = taxa
+        result.loc[mask, "duration"] = duration
+        result.loc[mask, "taxa_total_status"] = "IMPORTADO_LOTE"
+        result.loc[mask, "duration_status"] = "IMPORTADO_LOTE"
+        aplicados += 1
+
+    if aplicados:
+        mensagens.insert(0, f"Aplicado em {aplicados} fundo(s).")
+    elif not mensagens:
+        mensagens.append("Nenhuma premissa aplicada.")
+    return result, mensagens
+
+
+def _normalizar_colunas_premissas(df: pd.DataFrame) -> pd.DataFrame:
+    aliases = {
+        "ticker": "ticker",
+        "ativo": "ticker",
+        "fundo": "ticker",
+        "taxa": "taxa_total_aa",
+        "taxa_aa": "taxa_total_aa",
+        "taxa_total": "taxa_total_aa",
+        "taxa_total_aa": "taxa_total_aa",
+        "duration": "duration",
+        "dur": "duration",
+        "duration_anos": "duration",
+    }
+    rename = {}
+    for col in df.columns:
+        key = str(col).strip().lower()
+        key = re.sub(r"[^a-z0-9_]+", "_", key)
+        rename[col] = aliases.get(key, key)
+    return df.rename(columns=rename)
+
+
+def _parse_premissa_float(value) -> Optional[float]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        parsed = float(text)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _render_quality_panel(

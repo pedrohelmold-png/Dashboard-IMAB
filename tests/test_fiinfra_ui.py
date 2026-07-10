@@ -8,6 +8,7 @@ from streamlit.testing.v1 import AppTest
 
 from src.fiinfra_ui import (
     _add_signal_trace,
+    _apply_premissas_lote,
     _confirmar_estimativas_fundos,
     _historical_threshold,
     _macro_quality_rows,
@@ -199,6 +200,36 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(rows[0]["fonte"], "ANBIMA")
         self.assertEqual(rows[0]["status"], "OVERRIDE_MANUAL")
         self.assertTrue(rows[0]["override"])
+
+    def test_premissas_lote_atualiza_taxa_duration_e_status(self):
+        base = pd.DataFrame([
+            {"ticker": "IFRA11", "taxa_total_aa": 1.0, "duration": 8.0,
+             "taxa_total_status": "HISTORICO", "duration_status": "HISTORICO"},
+            {"ticker": "BDIF11", "taxa_total_aa": 1.0, "duration": 8.0,
+             "taxa_total_status": "HISTORICO", "duration_status": "HISTORICO"},
+        ])
+        texto = "ticker;taxa_total_aa;duration\nIFRA11;0,55;8,4\nBDIF11;0.60;7.8\n"
+
+        atualizados, mensagens = _apply_premissas_lote(base, texto)
+
+        self.assertIn("Aplicado em 2 fundo(s).", mensagens)
+        self.assertAlmostEqual(atualizados.loc[0, "taxa_total_aa"], 0.55)
+        self.assertAlmostEqual(atualizados.loc[1, "duration"], 7.8)
+        self.assertEqual(atualizados.loc[0, "taxa_total_status"], "IMPORTADO_LOTE")
+        self.assertEqual(base.loc[0, "taxa_total_status"], "HISTORICO")
+
+    def test_premissas_lote_rejeita_ticker_e_valores_invalidos(self):
+        base = pd.DataFrame([
+            {"ticker": "IFRA11", "taxa_total_aa": 1.0, "duration": 8.0,
+             "taxa_total_status": "HISTORICO", "duration_status": "HISTORICO"},
+        ])
+        texto = "ticker;taxa_total_aa;duration\nXXXX11;0,55;8,4\nIFRA11;9,0;8,0\n"
+
+        atualizados, mensagens = _apply_premissas_lote(base, texto)
+
+        self.assertAlmostEqual(atualizados.loc[0, "taxa_total_aa"], 1.0)
+        self.assertTrue(any("Ticker ignorado" in mensagem for mensagem in mensagens))
+        self.assertTrue(any("Taxa invalida" in mensagem for mensagem in mensagens))
 
     def test_historico_usa_limiares_congelados_com_fallback(self):
         hist = pd.DataFrame({

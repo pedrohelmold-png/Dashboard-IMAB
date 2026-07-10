@@ -70,9 +70,11 @@ salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e
-reutilizado como fallback. Quando taxa ou duration ainda sao estimativas, o
-salvamento exige confirmacao; depois de confirmado, o status fica gravado como
-manual confirmado.
+reutilizado como fallback. A taxa total e a duration tambem podem ser
+atualizadas em lote por CSV/clipboard na tela da regua; valores aplicados por
+esse caminho ficam com status `IMPORTADO_LOTE`. Quando taxa ou duration ainda
+sao estimativas, o salvamento exige confirmacao; depois de confirmado, o status
+fica gravado como manual confirmado.
 
 As taxas e descontos usam pontos percentuais (por exemplo, `6.5` para 6,5%), o
 spread usa pontos-base e a aliquota e armazenada em decimal.
