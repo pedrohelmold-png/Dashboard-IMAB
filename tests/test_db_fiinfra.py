@@ -4,11 +4,13 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from src.db import (
+    FIINFRA_SCHEMA_VERSION,
     get_ultimo_fiinfra_snapshot,
     init_db_fiinfra,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
     load_fiinfra_revisions,
+    load_fiinfra_schema_meta,
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
     load_fiinfra_tranches,
@@ -36,6 +38,12 @@ class DbFiInfraTests(unittest.TestCase):
             save_fiinfra_thresholds(
                 {"juro_real_caro": 7.0, "juro_real_barato": 6.0}, self.db_path
             )
+
+    def test_schema_meta_e_idempotente(self):
+        init_db_fiinfra(self.db_path)
+        meta = load_fiinfra_schema_meta(self.db_path)
+        self.assertEqual(meta["schema_name"], "fiinfra")
+        self.assertEqual(meta["schema_version"], FIINFRA_SCHEMA_VERSION)
 
     def test_snapshot_e_fundos_sao_substituidos_atomicamente(self):
         snapshot = self._snapshot()

@@ -69,6 +69,8 @@ das fontes, overrides, estimativas e pontos que exigem revisao antes do
 salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
 Erros de coleta e pontos confirmados na revisao ficam gravados no snapshot em
 JSON para auditoria posterior.
+O SQLite tambem registra metadados de schema da regua (`schema_name` e
+`schema_version`), facilitando diagnostico quando um banco antigo for reaberto.
 
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte

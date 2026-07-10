@@ -26,6 +26,7 @@ from config import DB_PATH
 from src.regua_fiinfra import DEFAULT_THRESHOLDS, validar_thresholds
 
 logger = logging.getLogger(__name__)
+FIINFRA_SCHEMA_VERSION = "2026-07-10.1"
 
 # ── Schema DDL — IMA-B 5 (tabelas originais) ───────────────────
 _SCHEMA = """
@@ -104,6 +105,12 @@ PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS fiinfra_thresholds (
     chave          TEXT PRIMARY KEY,
     valor          REAL NOT NULL,
+    atualizado_em  TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_schema_meta (
+    chave          TEXT PRIMARY KEY,
+    valor          TEXT NOT NULL,
     atualizado_em  TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -312,6 +319,7 @@ def init_db_fiinfra(db_path=None) -> None:
                 "INSERT OR IGNORE INTO fiinfra_thresholds (chave, valor) VALUES (?, ?)",
                 (chave, valor),
             )
+        _mark_fiinfra_schema_version(conn)
     logger.info(f"Banco FI-Infra inicializado em {db_path or DB_PATH}")
 
 
@@ -605,6 +613,13 @@ def load_fiinfra_thresholds(db_path=None) -> dict:
     return thresholds
 
 
+def load_fiinfra_schema_meta(db_path=None) -> dict:
+    """Carrega metadados do schema FI-Infra para auditoria e diagnostico."""
+    with _conn(db_path) as conn:
+        rows = conn.execute("SELECT chave, valor FROM fiinfra_schema_meta").fetchall()
+    return {chave: valor for chave, valor in rows}
+
+
 def get_ultimo_fiinfra_snapshot(db_path=None) -> Optional[dict]:
     """Retorna a foto mais recente da Regua FI-Infra."""
     with _conn(db_path) as conn:
@@ -776,6 +791,24 @@ def _fetch_all_dicts(
     cursor = conn.execute(query, params)
     cols = [d[0] for d in cursor.description]
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def _mark_fiinfra_schema_version(conn: sqlite3.Connection) -> None:
+    meta = {
+        "schema_name": "fiinfra",
+        "schema_version": FIINFRA_SCHEMA_VERSION,
+    }
+    for chave, valor in meta.items():
+        conn.execute(
+            """
+            INSERT INTO fiinfra_schema_meta (chave, valor, atualizado_em)
+            VALUES (?, ?, datetime('now', 'localtime'))
+            ON CONFLICT(chave) DO UPDATE SET
+                valor = excluded.valor,
+                atualizado_em = excluded.atualizado_em
+            """,
+            (chave, valor),
+        )
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
