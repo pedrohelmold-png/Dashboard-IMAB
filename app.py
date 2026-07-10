@@ -29,7 +29,7 @@ from src.fiinfra_ui import render_regua_fiinfra
 
 # ── Configuração da página ─────────────────────────────────────
 st.set_page_config(
-    page_title="IMA-B | Carrego",
+    page_title="IMA-B e FI-Infra",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -439,7 +439,7 @@ st.caption(
     f"⚠️ **Aviso metodológico:** este dashboard é um **proxy** do {indice_sel}, não o índice oficial. "
     f"Os pesos são calculados por *duration* — não refletem a carteira teórica divulgada pela ANBIMA. "
     f"Universo: {universo}. "
-    "A inflação projetada usa a inflação implícita da curva (breakeven) como fonte primária. "
+    "O carrego usa o IPCA Focus 12m como fonte primária e mantém a inflação implícita separada. "
     "O carrego exclui marcação a mercado (variações de taxa real). "
     "Dados históricos via [pyield](https://github.com/crdcj/PYield) · "
     "ANBIMA taxas indicativas · BCB CDI."

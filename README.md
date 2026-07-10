@@ -33,6 +33,12 @@ A inflacao implicita da NTN-B de referencia permanece separada como breakeven
 de mercado e funciona apenas como fallback explicitamente identificado se o
 Focus estiver indisponivel.
 
+Cada atualizacao forma um lote vinculado a data solicitada. Mudar a data
+invalida o lote anterior, e o botao forca nova leitura das fontes mesmo com o
+servidor aberto ha varios dias. B3 e CVM sao tratadas independentemente para
+preservar resultados parciais. A recomendacao operacional exige ao menos tres
+dos quatro fundos com dados completos.
+
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e

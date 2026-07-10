@@ -20,12 +20,19 @@ import urllib.parse
 import urllib.request
 import zipfile
 from datetime import date, timedelta
-from functools import lru_cache
+from threading import Lock
+import time
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_CACHE_LOCK = Lock()
+_BINARY_CACHE: dict[str, tuple[float, bytes]] = {}
+_FOCUS_CACHE: tuple[float, list[dict]] | None = None
+_CURRENT_DATA_TTL_SECONDS = 15 * 60
+_FOCUS_TTL_SECONDS = 60 * 60
 
 FIINFRA_FUNDOS = {
     "IFRA11": "34.633.510/0001-18",
@@ -143,7 +150,7 @@ def fetch_di_over(ref_date: date) -> Optional[float]:
 # IPCA projetado (fonte: BCB Focus)
 # ─────────────────────────────────────────────────────────────────
 
-def fetch_ipca_focus(ref_date: date) -> Optional[float]:
+def fetch_ipca_focus(ref_date: date, force_refresh: bool = False) -> Optional[float]:
     """
     Retorna IPCA projetado 12m em DECIMAL.
     Ex: 0.045 para projeção de 4,5% a.a.
@@ -151,14 +158,14 @@ def fetch_ipca_focus(ref_date: date) -> Optional[float]:
     Retorna None se indisponível (usa inflação implícita da curva como fallback
     no carrego.py).
     """
-    info = fetch_ipca_focus_info(ref_date)
+    info = fetch_ipca_focus_info(ref_date, force_refresh=force_refresh)
     return info["valor"] / 100 if info else None
 
 
-def fetch_ipca_focus_info(ref_date: date) -> Optional[dict]:
+def fetch_ipca_focus_info(ref_date: date, force_refresh: bool = False) -> Optional[dict]:
     """Busca a mediana suavizada do IPCA 12m no Olinda/BCB."""
     try:
-        rows = _fetch_focus_12m_rows()
+        rows = _fetch_focus_12m_rows(force_refresh=force_refresh)
         elegiveis = [row for row in rows if date.fromisoformat(row["Data"]) <= ref_date]
         if not elegiveis:
             return None
@@ -173,8 +180,16 @@ def fetch_ipca_focus_info(ref_date: date) -> Optional[dict]:
         return None
 
 
-@lru_cache(maxsize=1)
-def _fetch_focus_12m_rows() -> list[dict]:
+def _fetch_focus_12m_rows(force_refresh: bool = False) -> list[dict]:
+    global _FOCUS_CACHE
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if (
+            not force_refresh
+            and _FOCUS_CACHE is not None
+            and now - _FOCUS_CACHE[0] < _FOCUS_TTL_SECONDS
+        ):
+            return _FOCUS_CACHE[1]
     params = {
         "$top": "1000",
         "$format": "json",
@@ -189,13 +204,17 @@ def _fetch_focus_12m_rows() -> list[dict]:
     )
     request = urllib.request.Request(url, headers={"User-Agent": "IMAB-dashboard/1.0"})
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response).get("value", [])
+        rows = json.load(response).get("value", [])
+    with _CACHE_LOCK:
+        _FOCUS_CACHE = (time.monotonic(), rows)
+    return rows
 
 
 def fetch_fiinfra_macro(
     ref_date: date,
     target_duration: Optional[float] = None,
     lookback_days: int = 5,
+    force_refresh: bool = False,
 ) -> dict:
     """Coleta macro no ultimo dia disponivel e casa a NTN-B com a duration alvo."""
     resultado = {
@@ -217,7 +236,7 @@ def fetch_fiinfra_macro(
         "fonte": "ANBIMA + BCB Focus/DI",
     }
 
-    focus = fetch_ipca_focus_info(ref_date)
+    focus = fetch_ipca_focus_info(ref_date, force_refresh=force_refresh)
     if focus:
         resultado.update({
             "ipca_focus": focus["valor"],
@@ -272,10 +291,18 @@ def selecionar_ntnb_referencia(df: pd.DataFrame, target_duration: Optional[float
     return validos.loc[(validos["duration"].astype(float) - alvo).abs().idxmin()]
 
 
-def fetch_cotacoes_b3(ref_date: date, tickers=None, url: Optional[str] = None) -> dict:
+def fetch_cotacoes_b3(
+    ref_date: date,
+    tickers=None,
+    url: Optional[str] = None,
+    force_refresh: bool = False,
+) -> dict:
     """Retorna o ultimo fechamento B3 ate ``ref_date`` para cada ticker."""
     tickers = {str(t).upper() for t in (tickers or FIINFRA_FUNDOS)}
-    raw = _download_zip(url or B3_COTAHIST_URL.format(year=ref_date.year))
+    raw = _download_zip(
+        url or B3_COTAHIST_URL.format(year=ref_date.year),
+        force_refresh=force_refresh,
+    )
     encontrados = {}
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         member = next(n for n in archive.namelist() if n.upper().endswith(".TXT"))
@@ -305,12 +332,18 @@ def fetch_cotacoes_b3(ref_date: date, tickers=None, url: Optional[str] = None) -
     return encontrados
 
 
-def fetch_cotas_cvm(ref_date: date, fundos=None, url: Optional[str] = None) -> dict:
+def fetch_cotas_cvm(
+    ref_date: date,
+    fundos=None,
+    url: Optional[str] = None,
+    force_refresh: bool = False,
+) -> dict:
     """Retorna a ultima cota patrimonial CVM ate a data por ticker."""
     fundos = fundos or FIINFRA_FUNDOS
-    raw = _download_zip(url or CVM_INF_DIARIO_URL.format(
-        year=ref_date.year, month=ref_date.month
-    ))
+    raw = _download_zip(
+        url or CVM_INF_DIARIO_URL.format(year=ref_date.year, month=ref_date.month),
+        force_refresh=force_refresh,
+    )
     frames = []
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         for member in archive.namelist():
@@ -342,12 +375,38 @@ def fetch_cotas_cvm(ref_date: date, fundos=None, url: Optional[str] = None) -> d
     return resultado
 
 
-def fetch_fiinfra_fundos(ref_date: date, fundos=None) -> list[dict]:
+def fetch_fiinfra_fundos(ref_date: date, fundos=None, force_refresh: bool = False) -> list[dict]:
     """Combina fechamentos B3 e cotas patrimoniais CVM."""
+    return fetch_fiinfra_fundos_result(
+        ref_date, fundos=fundos, force_refresh=force_refresh
+    )["fundos"]
+
+
+def fetch_fiinfra_fundos_result(
+    ref_date: date,
+    fundos=None,
+    force_refresh: bool = False,
+) -> dict:
+    """Coleta B3 e CVM de forma independente, preservando resultados parciais."""
     fundos = fundos or FIINFRA_FUNDOS
-    mercado = fetch_cotacoes_b3(ref_date, fundos)
-    patrimonial = fetch_cotas_cvm(ref_date, fundos)
-    return [{
+    erros = {}
+    try:
+        mercado = fetch_cotacoes_b3(
+            ref_date, fundos, force_refresh=force_refresh
+        )
+    except Exception as exc:
+        logger.warning("Falha na coleta B3 FI-Infra: %s", exc)
+        mercado = {}
+        erros["b3"] = str(exc)
+    try:
+        patrimonial = fetch_cotas_cvm(
+            ref_date, fundos, force_refresh=force_refresh
+        )
+    except Exception as exc:
+        logger.warning("Falha na coleta CVM FI-Infra: %s", exc)
+        patrimonial = {}
+        erros["cvm"] = str(exc)
+    rows = [{
         "ticker": ticker,
         "cnpj": cnpj,
         "cota_mercado": mercado.get(ticker, {}).get("valor"),
@@ -363,13 +422,36 @@ def fetch_fiinfra_fundos(ref_date: date, fundos=None) -> list[dict]:
             patrimonial.get(ticker, {}).get("data"), ref_date
         ),
     } for ticker, cnpj in fundos.items()]
+    return {"fundos": rows, "erros": erros, "data_solicitada": ref_date}
 
 
-@lru_cache(maxsize=8)
-def _download_zip(url: str) -> bytes:
+def _download_zip(
+    url: str,
+    force_refresh: bool = False,
+    ttl_seconds: int = _CURRENT_DATA_TTL_SECONDS,
+) -> bytes:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _BINARY_CACHE.get(url)
+        if not force_refresh and cached and now - cached[0] < ttl_seconds:
+            return cached[1]
     request = urllib.request.Request(url, headers={"User-Agent": "IMAB-dashboard/1.0"})
     with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read()
+        raw = response.read()
+    with _CACHE_LOCK:
+        _BINARY_CACHE[url] = (time.monotonic(), raw)
+        if len(_BINARY_CACHE) > 8:
+            oldest = min(_BINARY_CACHE, key=lambda key: _BINARY_CACHE[key][0])
+            _BINARY_CACHE.pop(oldest, None)
+    return raw
+
+
+def clear_collector_cache() -> None:
+    """Limpa caches em memoria; util para refresh explicito e testes."""
+    global _FOCUS_CACHE
+    with _CACHE_LOCK:
+        _BINARY_CACHE.clear()
+        _FOCUS_CACHE = None
 
 
 def _only_digits(value) -> str:

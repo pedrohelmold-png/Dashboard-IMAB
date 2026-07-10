@@ -289,7 +289,7 @@ def _to_float(value) -> Optional[float]:
         if value == "":
             return None
         parsed = float(value)
-        if math.isnan(parsed):
+        if not math.isfinite(parsed):
             return None
         return parsed
     except (TypeError, ValueError):

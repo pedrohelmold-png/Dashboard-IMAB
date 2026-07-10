@@ -10,8 +10,11 @@ from src.collector import (
     fetch_cotas_cvm,
     fetch_cotacoes_b3,
     fetch_fiinfra_macro,
+    fetch_fiinfra_fundos_result,
     fetch_ipca_focus_info,
     selecionar_ntnb_referencia,
+    _download_zip,
+    clear_collector_cache,
 )
 
 
@@ -32,6 +35,9 @@ def _cotahist_line(data_ref, ticker, preco):
 
 
 class CollectorFiInfraTests(unittest.TestCase):
+    def tearDown(self):
+        clear_collector_cache()
+
     def test_cadastro_mestre_tem_os_quatro_fundos(self):
         self.assertEqual(set(FIINFRA_FUNDOS), {"IFRA11", "BDIF11", "KDIF11", "JURO11"})
         self.assertEqual(FIINFRA_FUNDOS["KDIF11"], "26.324.298/0001-89")
@@ -101,6 +107,31 @@ class CollectorFiInfraTests(unittest.TestCase):
         result = fetch_cotas_cvm(date(2026, 7, 10), {"IFRA11": cnpj})
         self.assertEqual(result["IFRA11"]["data"], date(2026, 7, 9))
         self.assertAlmostEqual(result["IFRA11"]["valor"], 95.25)
+
+    @patch("src.collector.urllib.request.urlopen")
+    def test_cache_tem_refresh_forcado(self, urlopen):
+        urlopen.side_effect = [io.BytesIO(b"primeiro"), io.BytesIO(b"segundo")]
+        self.assertEqual(_download_zip("https://exemplo.test/dados.zip"), b"primeiro")
+        self.assertEqual(_download_zip("https://exemplo.test/dados.zip"), b"primeiro")
+        self.assertEqual(
+            _download_zip("https://exemplo.test/dados.zip", force_refresh=True),
+            b"segundo",
+        )
+        self.assertEqual(urlopen.call_count, 2)
+
+    @patch("src.collector.fetch_cotas_cvm")
+    @patch("src.collector.fetch_cotacoes_b3")
+    def test_falha_b3_preserva_resultado_cvm(self, b3, cvm):
+        b3.side_effect = RuntimeError("B3 indisponivel")
+        cvm.return_value = {
+            "IFRA11": {"valor": 95.0, "data": date(2026, 7, 9), "fonte": "CVM"}
+        }
+        result = fetch_fiinfra_fundos_result(
+            date(2026, 7, 10), fundos={"IFRA11": FIINFRA_FUNDOS["IFRA11"]}
+        )
+        self.assertIn("b3", result["erros"])
+        self.assertIsNone(result["fundos"][0]["cota_mercado"])
+        self.assertEqual(result["fundos"][0]["cota_patrimonial"], 95.0)
 
 
 if __name__ == "__main__":

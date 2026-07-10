@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Optional
+from uuid import uuid4
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from src.collector import fetch_fiinfra_fundos, fetch_fiinfra_macro
+from src.collector import fetch_fiinfra_fundos_result, fetch_fiinfra_macro
 from src.db import (
     get_ultimo_carrego,
     get_ultimo_fiinfra_snapshot,
@@ -69,33 +70,49 @@ def render_regua_fiinfra() -> None:
     st.subheader("Snapshot semanal")
     update_cols = st.columns([1, 1, 3])
     with update_cols[0]:
-        ref_date = st.date_input("Data", value=date.today())
+        ref_date = st.date_input("Data", value=date.today(), max_value=date.today())
     with update_cols[1]:
         st.write("")
         st.write("")
         atualizar = st.button("Atualizar dados oficiais", type="primary", width="stretch")
 
+    collection = st.session_state.get("fiinfra_collection")
+    if collection and collection.get("data_solicitada") != ref_date:
+        st.session_state.pop("fiinfra_collection", None)
+        collection = None
+        st.info("A data mudou. Atualize os dados oficiais para esta nova referencia.")
+
     if atualizar:
         with st.spinner("Baixando dados ANBIMA, BCB, B3 e CVM..."):
-            erros = []
+            batch = {
+                "collection_id": uuid4().hex,
+                "data_solicitada": ref_date,
+                "coletado_em": datetime.now().isoformat(timespec="seconds"),
+                "macro": {},
+                "fundos": [],
+                "erros": [],
+            }
             target_duration = _duration_alvo()
             try:
-                st.session_state["fiinfra_auto_macro"] = fetch_fiinfra_macro(
-                    ref_date, target_duration=target_duration
+                batch["macro"] = fetch_fiinfra_macro(
+                    ref_date, target_duration=target_duration, force_refresh=True
                 )
             except Exception as exc:
-                erros.append(f"macro: {exc}")
-            try:
-                st.session_state["fiinfra_auto_fundos"] = fetch_fiinfra_fundos(ref_date)
-            except Exception as exc:
-                erros.append(f"fundos: {exc}")
-        _render_update_result(
-            st.session_state.get("fiinfra_auto_macro", {}),
-            st.session_state.get("fiinfra_auto_fundos", []),
-            erros,
-        )
+                batch["erros"].append(f"macro: {exc}")
+            fundos_result = fetch_fiinfra_fundos_result(ref_date, force_refresh=True)
+            batch["fundos"] = fundos_result["fundos"]
+            batch["erros"].extend(
+                f"{fonte}: {erro}" for fonte, erro in fundos_result["erros"].items()
+            )
+            st.session_state["fiinfra_collection"] = batch
+            collection = batch
 
-    auto_macro = st.session_state.get("fiinfra_auto_macro", {})
+    collection = collection or {}
+    auto_macro = collection.get("macro", {})
+    auto_fundos = collection.get("fundos", [])
+    collection_id = collection.get("collection_id", f"manual_{ref_date.isoformat()}")
+    if collection:
+        _render_update_result(auto_macro, auto_fundos, collection.get("erros", []))
     input_cols = st.columns([1, 1, 1, 1])
     with input_cols[0]:
         ntnb = st.number_input(
@@ -103,6 +120,7 @@ def render_regua_fiinfra() -> None:
             value=_auto_or_fallback(auto_macro, "ntnb", ultimo_snapshot, "ntnb", 6.5),
             step=0.05,
             format="%.2f",
+            key=f"fiinfra_ntnb_{collection_id}",
         )
     with input_cols[1]:
         spread = st.number_input(
@@ -111,12 +129,14 @@ def render_regua_fiinfra() -> None:
             step=5.0,
             format="%.0f",
             help="Mantido manual ate haver serie ANBIMA estruturada e estavel.",
+            key=f"fiinfra_spread_{collection_id}",
         )
     with input_cols[2]:
         mandato = st.selectbox(
             "Mandato",
             options=list(MANDATOS),
             index=_mandato_index(ultimo_snapshot),
+            key=f"fiinfra_mandato_{collection_id}",
         )
     with input_cols[3]:
         st.metric("Fonte macro", auto_macro.get("fonte", "Ultimo snapshot/manual"))
@@ -142,6 +162,7 @@ def render_regua_fiinfra() -> None:
             ),
             step=0.05,
             format="%.2f",
+            key=f"fiinfra_cdi_{collection_id}",
         )
     with macro_cols[1]:
         ipca_focus = st.number_input(
@@ -153,6 +174,7 @@ def render_regua_fiinfra() -> None:
             step=0.05,
             format="%.2f",
             help="Mediana suavizada oficial do BCB; usada para deflacionar o CDI.",
+            key=f"fiinfra_focus_{collection_id}",
         )
     with macro_cols[2]:
         inflacao_implicita = st.number_input(
@@ -165,6 +187,7 @@ def render_regua_fiinfra() -> None:
             ),
             step=0.05,
             format="%.2f",
+            key=f"fiinfra_implicita_{collection_id}",
         )
     with macro_cols[3]:
         aliquota_pct = st.number_input(
@@ -174,6 +197,7 @@ def render_regua_fiinfra() -> None:
             max_value=35.0,
             step=1.0,
             format="%.1f",
+            key=f"fiinfra_aliquota_{collection_id}",
         )
     aliquota = aliquota_pct / 100
     focus_disponivel = auto_macro.get("ipca_focus") is not None or (
@@ -194,13 +218,14 @@ def render_regua_fiinfra() -> None:
             value=_ultimo_imab_value(ultimo_imab, "ytm_real", ntnb),
             step=0.05,
             format="%.2f",
+            key=f"fiinfra_imab_{collection_id}",
         )
         alternativa_liquida_real = imab_real * (1 - aliquota)
     else:
         alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_usada)
 
     st.subheader("Fundos monitorados")
-    fundos_base = _fundos_base(st.session_state.get("fiinfra_auto_fundos"))
+    fundos_base = _fundos_base(auto_fundos)
     fundos_editados = st.data_editor(
         fundos_base,
         hide_index=True,
@@ -217,15 +242,21 @@ def render_regua_fiinfra() -> None:
             "mercado_status": st.column_config.TextColumn("Status mercado", disabled=True),
             "patrimonial_status": st.column_config.TextColumn("Status patrimonial", disabled=True),
         },
+        key=f"fiinfra_fundos_editor_{collection_id}",
     )
 
     fundos_calc, excesso_mediano, duration_mediana = preparar_fundos(
         fundos_editados.to_dict("records")
     )
     fundos_df = pd.DataFrame(fundos_calc)
+    cobertura = sum(row.get("excesso_desconto") is not None for row in fundos_calc)
+    st.caption(f"Cobertura do sinal de desconto: {cobertura}/{len(fundos_calc)} fundos válidos.")
 
-    if excesso_mediano is None:
-        st.warning("Preencha cota de mercado, cota patrimonial, taxa total e duration de pelo menos um fundo.")
+    if cobertura < 3:
+        st.warning(
+            "Cobertura insuficiente para uma recomendacao operacional. "
+            "Sao necessarios pelo menos 3 fundos com dados completos."
+        )
         _render_history(thresholds)
         _render_tranches()
         return
@@ -316,7 +347,7 @@ def _render_threshold_editor(thresholds: dict) -> dict:
                 save_fiinfra_thresholds(editados)
                 st.success("Limiares salvos.")
                 st.rerun()
-    return editados
+    return thresholds
 
 
 def _render_zona(avaliacao: dict, execucao: dict) -> None:

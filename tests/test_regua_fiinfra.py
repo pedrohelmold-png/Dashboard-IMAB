@@ -57,6 +57,15 @@ class ReguaFiInfraTests(unittest.TestCase):
         self.assertEqual(duration, 9.0)
         self.assertIsNone(fundos[1]["excesso_desconto"])
 
+    def test_preparar_fundos_rejeita_valores_infinitos(self):
+        fundos, excesso, duration = preparar_fundos([{
+            "ticker": "IFRA11", "cota_mercado": math.inf,
+            "cota_patrimonial": 100, "taxa_total_aa": 1, "duration": 8,
+        }])
+        self.assertIsNone(fundos[0]["cota_mercado"])
+        self.assertIsNone(excesso)
+        self.assertEqual(duration, 8)
+
     def test_carry_e_cdi_real(self):
         self.assertAlmostEqual(calcular_yield_fundo_real(6.0, 100, 4.0, 8.0), 7.5)
         esperado = ((1 + 0.12 * 0.85) / 1.05 - 1) * 100

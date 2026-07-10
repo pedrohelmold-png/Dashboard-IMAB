@@ -22,7 +22,7 @@ from typing import Generator, Optional
 import pandas as pd
 
 from config import DB_PATH
-from src.regua_fiinfra import DEFAULT_THRESHOLDS
+from src.regua_fiinfra import DEFAULT_THRESHOLDS, validar_thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +294,7 @@ def upsert_composicao(
 
 def save_fiinfra_thresholds(thresholds: dict, db_path=None) -> None:
     """Persiste os limiares editaveis da Regua FI-Infra."""
+    thresholds = validar_thresholds(thresholds)
     with _conn(db_path) as conn:
         for chave, valor in thresholds.items():
             conn.execute("""

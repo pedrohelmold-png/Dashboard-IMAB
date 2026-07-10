@@ -30,6 +30,10 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(thresholds["juro_real_barato"], 6.5)
         save_fiinfra_thresholds({"juro_real_barato": 7.0}, self.db_path)
         self.assertEqual(load_fiinfra_thresholds(self.db_path)["juro_real_barato"], 7.0)
+        with self.assertRaises(ValueError):
+            save_fiinfra_thresholds(
+                {"juro_real_caro": 7.0, "juro_real_barato": 6.0}, self.db_path
+            )
 
     def test_snapshot_e_fundos_sao_substituidos_atomicamente(self):
         snapshot = self._snapshot()
