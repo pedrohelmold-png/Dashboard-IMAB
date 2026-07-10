@@ -17,6 +17,12 @@ Diario da CVM. Confira os tres sinais e salve o snapshot semanal. Limiares,
 snapshots e tranches ficam no SQLite configurado em
 `config.py`.
 
+Nos dashboards de carrego, o **IPCA Focus 12m** e comum ao IMA-B 5 e ao IMA-B
+na mesma data e e a premissa principal do carrego nominal. A **inflacao
+implicita** e exibida separadamente e pode diferir entre os indices porque e
+ponderada pelos titulos de cada universo. Na falta do Focus, a implicita e
+usada como fallback explicitamente identificado.
+
 Quando a data solicitada ainda nao foi publicada, a coleta recua ate cinco
 dias uteis e marca o valor como defasado. A NTN-B de referencia e o titulo com
 duration mais proxima da duration mediana dos fundos; vencimento, duration,

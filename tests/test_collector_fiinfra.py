@@ -10,6 +10,7 @@ from src.collector import (
     fetch_cotas_cvm,
     fetch_cotacoes_b3,
     fetch_fiinfra_macro,
+    fetch_ipca_focus_info,
     selecionar_ntnb_referencia,
 )
 
@@ -43,6 +44,16 @@ class CollectorFiInfraTests(unittest.TestCase):
         ])
         row = selecionar_ntnb_referencia(df, target_duration=8.0)
         self.assertEqual(row["data_vencimento"], date(2040, 8, 15))
+
+    @patch("src.collector._fetch_focus_12m_rows")
+    def test_focus_12m_escolhe_ultima_data_ate_referencia(self, rows):
+        rows.return_value = [
+            {"Data": "2026-07-10", "Mediana": 4.2},
+            {"Data": "2026-07-03", "Mediana": 4.1001},
+        ]
+        info = fetch_ipca_focus_info(date(2026, 7, 9))
+        self.assertEqual(info["data"], date(2026, 7, 3))
+        self.assertAlmostEqual(info["valor"], 4.1001)
 
     @patch("src.collector.fetch_ipca_focus", return_value=None)
     @patch("src.collector.fetch_di_over")

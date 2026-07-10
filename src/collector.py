@@ -14,7 +14,9 @@ Fontes:
 """
 import logging
 import io
+import json
 import re
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import date, timedelta
@@ -36,6 +38,10 @@ B3_COTAHIST_URL = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{y
 CVM_INF_DIARIO_URL = (
     "https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/"
     "inf_diario_fi_{year}{month:02d}.zip"
+)
+BCB_FOCUS_12M_URL = (
+    "https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/"
+    "ExpectativasMercadoInflacao12Meses"
 )
 
 
@@ -145,20 +151,45 @@ def fetch_ipca_focus(ref_date: date) -> Optional[float]:
     Retorna None se indisponível (usa inflação implícita da curva como fallback
     no carrego.py).
     """
-    yd = _yd()
-    date_str = ref_date.strftime("%d-%m-%Y")
+    info = fetch_ipca_focus_info(ref_date)
+    return info["valor"] / 100 if info else None
+
+
+def fetch_ipca_focus_info(ref_date: date) -> Optional[dict]:
+    """Busca a mediana suavizada do IPCA 12m no Olinda/BCB."""
     try:
-        rate = yd.ipca.taxa_projetada(date_str)
-        if rate is None:
+        rows = _fetch_focus_12m_rows()
+        elegiveis = [row for row in rows if date.fromisoformat(row["Data"]) <= ref_date]
+        if not elegiveis:
             return None
-        r = float(rate)
-        # Sanity: se r > 2.0 está em % → dividir por 100
-        if r > 2.0:
-            r = r / 100.0
-        return r if r > 0 else None
+        row = max(elegiveis, key=lambda item: item["Data"])
+        return {
+            "valor": float(row["Mediana"]),
+            "data": date.fromisoformat(row["Data"]),
+            "fonte": "BCB Focus IPCA 12m suavizado",
+        }
     except Exception as exc:
-        logger.debug(f"ipca.taxa_projetada({date_str}) sem dado: {exc}")
+        logger.warning(f"Focus IPCA 12m indisponivel para {ref_date}: {exc}")
         return None
+
+
+@lru_cache(maxsize=1)
+def _fetch_focus_12m_rows() -> list[dict]:
+    params = {
+        "$top": "1000",
+        "$format": "json",
+        "$filter": (
+            "Indicador eq 'IPCA' and Suavizada eq 'S' and baseCalculo eq 0"
+        ),
+        "$orderby": "Data desc",
+    }
+    url = BCB_FOCUS_12M_URL + "?" + "&".join(
+        "{}={}".format(key, urllib.parse.quote(value, safe="'"))
+        for key, value in params.items()
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": "IMAB-dashboard/1.0"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response).get("value", [])
 
 
 def fetch_fiinfra_macro(
@@ -218,16 +249,6 @@ def fetch_fiinfra_macro(
             })
             break
 
-    if resultado["inflacao_implicita"] is None:
-        for data_busca in _lookback_dates(ref_date, lookback_days):
-            ipca = fetch_ipca_focus(data_busca)
-            if ipca is not None and pd.notna(ipca):
-                resultado.update({
-                    "inflacao_implicita": ipca * 100,
-                    "inflacao_data": data_busca,
-                    "inflacao_status": _freshness_status(data_busca, ref_date),
-                })
-                break
     return resultado
 
 

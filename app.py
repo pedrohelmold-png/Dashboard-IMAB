@@ -193,7 +193,7 @@ if ultimo:
         f"Última atualização: **{ultimo['data']}** · "
         f"{ultimo['n_bonds']} título(s) · "
         f"pesos por {ultimo['metodo_peso']} · "
-        f"IPCA: {ultimo['fonte_ipca']}"
+        f"IPCA usado no carrego: {ultimo['fonte_ipca']}"
     )
 else:
     flag_str = " ".join(cfg["etl_flag"])
@@ -207,7 +207,7 @@ else:
 # ─────────────────────────────────────────────────────────────────
 # KPI Cards
 # ─────────────────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     st.metric(
@@ -218,20 +218,26 @@ with c1:
 
 with c2:
     st.metric(
-        label="IPCA Projetado 12m",
-        value=f"{ultimo['ipca_proj']:.2f}%",
-        help=f"Fonte: {ultimo['fonte_ipca']}. "
-             "'implicita' = breakeven da curva; 'focus' = BCB Focus.",
+        label="IPCA Focus 12m",
+        value=f"{ultimo['ipca_focus']:.2f}%" if ultimo.get("ipca_focus") is not None else "N/D",
+        help=f"Mediana suavizada do BCB Focus. Data-base: {ultimo.get('ipca_focus_data') or 'N/D'}.",
     )
 
 with c3:
     st.metric(
-        label="Carrego Nominal Bruto",
-        value=f"{ultimo['carrego_nominal']:.2f}% a.a.",
-        help="(1 + taxa real) × (1 + IPCA proj) − 1",
+        label=f"Inflação implícita ({indice_sel})",
+        value=f"{ultimo['ipca_implicita']:.2f}%" if ultimo.get("ipca_implicita") is not None else "N/D",
+        help="Breakeven ponderado das NTN-Bs do universo do índice; varia com vencimentos e pesos.",
     )
 
 with c4:
+    st.metric(
+        label="Carrego Nominal Bruto",
+        value=f"{ultimo['carrego_nominal']:.2f}% a.a.",
+        help=f"(1 + taxa real) × (1 + IPCA usado) − 1. Fonte: {ultimo['fonte_ipca']}.",
+    )
+
+with c5:
     if ultimo["premio_vs_cdi"] is not None:
         delta_str = f"CDI: {ultimo['cdi_anual']:.2f}% a.a."
         st.metric(
@@ -255,6 +261,13 @@ st.divider()
 # Gráfico principal — histórico de carrego vs CDI
 # ─────────────────────────────────────────────────────────────────
 st.subheader("Histórico")
+
+if "ipca_focus" in hist and hist["ipca_focus"].isna().any():
+    st.caption(
+        "Mudança metodológica em 09/07/2026: registros anteriores calculavam o "
+        "carrego com a inflação implícita. A partir dessa data, o IPCA Focus 12m "
+        "é a premissa principal; a implícita permanece como série separada."
+    )
 
 if hist.empty:
     st.info("Sem histórico suficiente. Execute o backfill para popular.")
@@ -289,6 +302,21 @@ else:
         hovertemplate="IPCA+%{y:.2f}%<extra>Taxa Real</extra>",
         visible="legendonly",
     ))
+
+    if "ipca_focus" in hist and hist["ipca_focus"].notna().any():
+        fig.add_trace(go.Scatter(
+            x=hist["data"], y=hist["ipca_focus"], name="IPCA Focus 12m",
+            connectgaps=False, line=dict(color="#7c3aed", width=1.5),
+            hovertemplate="%{y:.2f}%<extra>IPCA Focus 12m</extra>",
+            visible="legendonly",
+        ))
+    if "ipca_implicita" in hist and hist["ipca_implicita"].notna().any():
+        fig.add_trace(go.Scatter(
+            x=hist["data"], y=hist["ipca_implicita"], name="Inflação implícita",
+            connectgaps=False, line=dict(color="#ea580c", width=1.5, dash="dash"),
+            hovertemplate="%{y:.2f}%<extra>Inflação implícita</extra>",
+            visible="legendonly",
+        ))
 
     if hist["cdi_anual"].notna().any():
         fig.add_trace(go.Scatter(

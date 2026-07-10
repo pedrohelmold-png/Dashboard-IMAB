@@ -21,7 +21,7 @@ import time
 from datetime import date, timedelta
 
 from config import BACKFILL_DAYS
-from src.collector import fetch_ntnb, fetch_di_over, fetch_ipca_focus, dias_uteis_br
+from src.collector import fetch_ntnb, fetch_di_over, fetch_ipca_focus_info, dias_uteis_br
 from src.carrego import calcular_carrego
 from src.db import init_db, init_db_imab, ja_tem_dado, upsert_carrego, upsert_composicao, get_ultimo_cdi
 
@@ -92,7 +92,8 @@ def processar_data(ref: date, forcar: bool = False, index: str = "imab5") -> boo
             logger.warning(f"{ref}: CDI sem fallback disponível.")
 
     # 3. IPCA Focus (opcional — carrego.py usa inflação implícita da curva)
-    ipca_focus = fetch_ipca_focus(ref)
+    ipca_focus_info = fetch_ipca_focus_info(ref)
+    ipca_focus = ipca_focus_info["valor"] / 100 if ipca_focus_info else None
 
     # 4. Calcular carrego
     try:
@@ -106,6 +107,7 @@ def processar_data(ref: date, forcar: bool = False, index: str = "imab5") -> boo
     except ValueError as exc:
         logger.error(f"{ref} [{cfg['label']}]: cálculo falhou — {exc}")
         return False
+    snap["ipca_focus_data"] = ipca_focus_info["data"] if ipca_focus_info else None
 
     # 5. Persistir
     upsert_carrego(snap, table=carrego_table)

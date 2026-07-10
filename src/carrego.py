@@ -11,8 +11,8 @@ Pesos:
     equal     → peso_i = 1 / N
 
 IPCA projetado (em ordem de preferência):
-    1. Inflação implícita da curva (média ponderada de inflacao_implicita)
-    2. BCB Focus fornecido pelo chamador
+    1. BCB Focus 12 meses fornecido pelo chamador
+    2. Inflação implícita da curva (média ponderada de inflacao_implicita)
     3. Fallback hardcoded (4.5%)
 
 Índices suportados via parâmetro `filtrar`:
@@ -155,8 +155,7 @@ def calcular_carrego(
     # 4. YTM real ponderado
     ytm_real: float = (b["peso"] * b["taxa_indicativa"]).sum()
 
-    # 5. IPCA projetado
-    #    Prioridade: inflação implícita da curva > Focus > fallback
+    # 5. IPCA Focus e inflação implícita são métricas distintas.
     if "inflacao_implicita" in b.columns and b["inflacao_implicita"].notna().any():
         ipca_implicita: float = (b["peso"] * b["inflacao_implicita"]).sum()
         ipca_fonte = "implicita"
@@ -164,12 +163,12 @@ def calcular_carrego(
         ipca_implicita = None
         ipca_fonte = None
 
-    if ipca_implicita is not None:
-        ipca_proj = ipca_implicita
-        ipca_fonte = "implicita"
-    elif ipca_focus is not None:
+    if ipca_focus is not None:
         ipca_proj = ipca_focus
         ipca_fonte = "focus"
+    elif ipca_implicita is not None:
+        ipca_proj = ipca_implicita
+        ipca_fonte = "implicita_fallback"
     else:
         ipca_proj = _IPCA_FALLBACK
         ipca_fonte = "fallback"
@@ -195,6 +194,8 @@ def calcular_carrego(
         # ── taxas em % a.a. ──────────────────────────────────────
         "ytm_real":         round(ytm_real * 100, 4),
         "ipca_proj":        round(ipca_proj * 100, 4),
+        "ipca_focus":       round(ipca_focus * 100, 4) if ipca_focus is not None else None,
+        "ipca_implicita":   round(ipca_implicita * 100, 4) if ipca_implicita is not None else None,
         "carrego_nominal":  round(carrego_nominal * 100, 4),
         "carrego_diario":   round(carrego_diario * 100, 6),
         "cdi_anual":        round(di_annual * 100, 4) if di_annual is not None else None,

@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS carrego_historico (
     data             TEXT PRIMARY KEY,   -- YYYY-MM-DD
     ytm_real         REAL,               -- % a.a. (taxa real pond.)
     ipca_proj        REAL,               -- % a.a. (IPCA projetado)
+    ipca_focus       REAL,               -- % a.a. (Focus 12m)
+    ipca_implicita   REAL,               -- % a.a. (breakeven ponderado)
+    ipca_focus_data  TEXT,
     carrego_nominal  REAL,               -- % a.a. (carrego bruto)
     carrego_diario   REAL,               -- % a.d.
     cdi_anual        REAL,               -- % a.a.
@@ -66,6 +69,9 @@ CREATE TABLE IF NOT EXISTS carrego_historico_imab (
     data             TEXT PRIMARY KEY,
     ytm_real         REAL,
     ipca_proj        REAL,
+    ipca_focus       REAL,
+    ipca_implicita   REAL,
+    ipca_focus_data  TEXT,
     carrego_nominal  REAL,
     carrego_diario   REAL,
     cdi_anual        REAL,
@@ -188,6 +194,9 @@ def init_db(db_path=None) -> None:
     """Cria as tabelas IMA-B 5 se não existirem. Idempotente."""
     with _conn(db_path) as conn:
         conn.executescript(_SCHEMA)
+        _ensure_columns(conn, "carrego_historico", {
+            "ipca_focus": "REAL", "ipca_implicita": "REAL", "ipca_focus_data": "TEXT",
+        })
     logger.info(f"Banco IMA-B 5 inicializado em {db_path or DB_PATH}")
 
 
@@ -195,6 +204,9 @@ def init_db_imab(db_path=None) -> None:
     """Cria as tabelas IMA-B (full) se não existirem. Idempotente."""
     with _conn(db_path) as conn:
         conn.executescript(_SCHEMA_IMAB)
+        _ensure_columns(conn, "carrego_historico_imab", {
+            "ipca_focus": "REAL", "ipca_implicita": "REAL", "ipca_focus_data": "TEXT",
+        })
     logger.info(f"Banco IMA-B inicializado em {db_path or DB_PATH}")
 
 
@@ -223,13 +235,20 @@ def init_db_fiinfra(db_path=None) -> None:
 def upsert_carrego(snap: dict, db_path=None, table: str = "carrego_historico") -> None:
     """Grava (ou substitui) um snapshot diário de carrego."""
     row = {**snap, "data": str(snap["data"])}
+    row.setdefault("ipca_focus", None)
+    row.setdefault("ipca_implicita", None)
+    row.setdefault("ipca_focus_data", None)
+    if row["ipca_focus_data"] is not None:
+        row["ipca_focus_data"] = str(row["ipca_focus_data"])
     with _conn(db_path) as conn:
         conn.execute(f"""
             INSERT OR REPLACE INTO {table}
-              (data, ytm_real, ipca_proj, carrego_nominal, carrego_diario,
+              (data, ytm_real, ipca_proj, ipca_focus, ipca_implicita, ipca_focus_data,
+               carrego_nominal, carrego_diario,
                cdi_anual, premio_vs_cdi, n_bonds, metodo_peso, fonte_ipca)
             VALUES
-              (:data, :ytm_real, :ipca_proj, :carrego_nominal, :carrego_diario,
+              (:data, :ytm_real, :ipca_proj, :ipca_focus, :ipca_implicita, :ipca_focus_data,
+               :carrego_nominal, :carrego_diario,
                :cdi_anual, :premio_vs_cdi, :n_bonds, :metodo_peso, :fonte_ipca)
         """, row)
 
