@@ -161,35 +161,83 @@ def fetch_ipca_focus(ref_date: date) -> Optional[float]:
         return None
 
 
-def fetch_fiinfra_macro(ref_date: date) -> dict:
-    """Coleta os dados macro usados pela regua, com data e fonte."""
-    ntnb_df = fetch_ntnb(ref_date)
-    ntnb = inflacao = duration = None
-    if not ntnb_df.empty and "taxa_indicativa" in ntnb_df:
-        validos = ntnb_df.dropna(subset=["taxa_indicativa"])
-        if not validos.empty:
-            if "duration" in validos and validos["duration"].notna().any():
-                row = validos.loc[validos["duration"].idxmax()]
-                duration = _percent_or_decimal(row.get("duration"), percent=False)
-            else:
-                row = validos.iloc[-1]
-            ntnb_decimal = _percent_or_decimal(row.get("taxa_indicativa"))
-            ntnb = ntnb_decimal * 100 if ntnb_decimal is not None else None
-            implicita_decimal = _percent_or_decimal(row.get("inflacao_implicita"))
-            inflacao = implicita_decimal * 100 if implicita_decimal is not None else None
-
-    di = fetch_di_over(ref_date)
-    ipca = fetch_ipca_focus(ref_date)
-    if inflacao is None and ipca is not None:
-        inflacao = ipca * 100
-    return {
-        "data": ref_date,
-        "ntnb": ntnb,
-        "ntnb_duration": duration,
-        "cdi": di * 100 if di is not None else None,
-        "inflacao_implicita": inflacao,
+def fetch_fiinfra_macro(
+    ref_date: date,
+    target_duration: Optional[float] = None,
+    lookback_days: int = 5,
+) -> dict:
+    """Coleta macro no ultimo dia disponivel e casa a NTN-B com a duration alvo."""
+    resultado = {
+        "data_solicitada": ref_date,
+        "ntnb": None,
+        "ntnb_vencimento": None,
+        "ntnb_duration": None,
+        "ntnb_data": None,
+        "ntnb_status": "INDISPONIVEL",
+        "cdi": None,
+        "cdi_data": None,
+        "cdi_status": "INDISPONIVEL",
+        "inflacao_implicita": None,
+        "inflacao_data": None,
+        "inflacao_status": "INDISPONIVEL",
         "fonte": "ANBIMA/BCB via pyield",
     }
+
+    for data_busca in _lookback_dates(ref_date, lookback_days):
+        ntnb_df = fetch_ntnb(data_busca)
+        if ntnb_df.empty or "taxa_indicativa" not in ntnb_df:
+            continue
+        validos = ntnb_df.dropna(subset=["taxa_indicativa"])
+        if validos.empty:
+            continue
+        row = selecionar_ntnb_referencia(validos, target_duration)
+        taxa = _percent_or_decimal(row.get("taxa_indicativa"))
+        resultado.update({
+            "ntnb": taxa * 100 if taxa is not None else None,
+            "ntnb_vencimento": row.get("data_vencimento"),
+            "ntnb_duration": _percent_or_decimal(row.get("duration"), percent=False),
+            "ntnb_data": data_busca,
+            "ntnb_status": _freshness_status(data_busca, ref_date),
+        })
+        implicita = _percent_or_decimal(row.get("inflacao_implicita"))
+        if implicita is not None:
+            resultado.update({
+                "inflacao_implicita": implicita * 100,
+                "inflacao_data": data_busca,
+                "inflacao_status": _freshness_status(data_busca, ref_date),
+            })
+        break
+
+    for data_busca in _lookback_dates(ref_date, lookback_days):
+        di = fetch_di_over(data_busca)
+        if di is not None and pd.notna(di):
+            resultado.update({
+                "cdi": di * 100,
+                "cdi_data": data_busca,
+                "cdi_status": _freshness_status(data_busca, ref_date),
+            })
+            break
+
+    if resultado["inflacao_implicita"] is None:
+        for data_busca in _lookback_dates(ref_date, lookback_days):
+            ipca = fetch_ipca_focus(data_busca)
+            if ipca is not None and pd.notna(ipca):
+                resultado.update({
+                    "inflacao_implicita": ipca * 100,
+                    "inflacao_data": data_busca,
+                    "inflacao_status": _freshness_status(data_busca, ref_date),
+                })
+                break
+    return resultado
+
+
+def selecionar_ntnb_referencia(df: pd.DataFrame, target_duration: Optional[float] = None):
+    """Seleciona a NTN-B de duration mais proxima; sem alvo, usa a mediana da curva."""
+    if "duration" not in df or not df["duration"].notna().any():
+        return df.iloc[-1]
+    validos = df.dropna(subset=["duration"]).copy()
+    alvo = float(target_duration) if target_duration is not None else float(validos["duration"].median())
+    return validos.loc[(validos["duration"].astype(float) - alvo).abs().idxmin()]
 
 
 def fetch_cotacoes_b3(ref_date: date, tickers=None, url: Optional[str] = None) -> dict:
@@ -273,9 +321,15 @@ def fetch_fiinfra_fundos(ref_date: date, fundos=None) -> list[dict]:
         "cota_mercado": mercado.get(ticker, {}).get("valor"),
         "cota_mercado_data": mercado.get(ticker, {}).get("data"),
         "cota_mercado_fonte": mercado.get(ticker, {}).get("fonte"),
+        "cota_mercado_status": _freshness_status(
+            mercado.get(ticker, {}).get("data"), ref_date
+        ),
         "cota_patrimonial": patrimonial.get(ticker, {}).get("valor"),
         "cota_patrimonial_data": patrimonial.get(ticker, {}).get("data"),
         "cota_patrimonial_fonte": patrimonial.get(ticker, {}).get("fonte"),
+        "cota_patrimonial_status": _freshness_status(
+            patrimonial.get(ticker, {}).get("data"), ref_date
+        ),
     } for ticker, cnpj in fundos.items()]
 
 
@@ -314,6 +368,22 @@ def _percent_or_decimal(value, percent: bool = True) -> Optional[float]:
     if not percent:
         return parsed
     return parsed / 100 if abs(parsed) > 1 else parsed
+
+
+def _lookback_dates(ref_date: date, limit: int):
+    current = ref_date
+    emitted = 0
+    while emitted <= limit:
+        if current.weekday() < 5:
+            yield current
+            emitted += 1
+        current -= timedelta(days=1)
+
+
+def _freshness_status(data_value: Optional[date], ref_date: date) -> str:
+    if data_value is None:
+        return "INDISPONIVEL"
+    return "ATUALIZADO" if data_value == ref_date else "DEFASADO"
 
 
 # ─────────────────────────────────────────────────────────────────

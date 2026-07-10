@@ -17,6 +17,11 @@ Diario da CVM. Confira os tres sinais e salve o snapshot semanal. Limiares,
 snapshots e tranches ficam no SQLite configurado em
 `config.py`.
 
+Quando a data solicitada ainda nao foi publicada, a coleta recua ate cinco
+dias uteis e marca o valor como defasado. A NTN-B de referencia e o titulo com
+duration mais proxima da duration mediana dos fundos; vencimento, duration,
+data-base e status aparecem na tela e sao gravados no snapshot.
+
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e

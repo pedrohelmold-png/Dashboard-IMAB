@@ -3,11 +3,14 @@ import io
 import unittest
 from unittest.mock import patch
 import zipfile
+import pandas as pd
 
 from src.collector import (
     FIINFRA_FUNDOS,
     fetch_cotas_cvm,
     fetch_cotacoes_b3,
+    fetch_fiinfra_macro,
+    selecionar_ntnb_referencia,
 )
 
 
@@ -31,6 +34,32 @@ class CollectorFiInfraTests(unittest.TestCase):
     def test_cadastro_mestre_tem_os_quatro_fundos(self):
         self.assertEqual(set(FIINFRA_FUNDOS), {"IFRA11", "BDIF11", "KDIF11", "JURO11"})
         self.assertEqual(FIINFRA_FUNDOS["KDIF11"], "26.324.298/0001-89")
+
+    def test_ntnb_escolhe_duration_mais_proxima(self):
+        df = pd.DataFrame([
+            {"data_vencimento": date(2035, 5, 15), "duration": 6.5, "taxa_indicativa": 0.07},
+            {"data_vencimento": date(2040, 8, 15), "duration": 8.8, "taxa_indicativa": 0.075},
+            {"data_vencimento": date(2060, 8, 15), "duration": 13.0, "taxa_indicativa": 0.074},
+        ])
+        row = selecionar_ntnb_referencia(df, target_duration=8.0)
+        self.assertEqual(row["data_vencimento"], date(2040, 8, 15))
+
+    @patch("src.collector.fetch_ipca_focus", return_value=None)
+    @patch("src.collector.fetch_di_over")
+    @patch("src.collector.fetch_ntnb")
+    def test_macro_recua_e_marca_dado_defasado(self, ntnb, di, _ipca):
+        vazio = pd.DataFrame()
+        curva = pd.DataFrame([{
+            "data_vencimento": date(2040, 8, 15), "duration": 8.8,
+            "taxa_indicativa": 0.075, "inflacao_implicita": 0.05,
+        }])
+        ntnb.side_effect = [vazio, curva]
+        di.side_effect = [None, 0.1415]
+        result = fetch_fiinfra_macro(date(2026, 7, 10), target_duration=8.0)
+        self.assertEqual(result["ntnb_data"], date(2026, 7, 9))
+        self.assertEqual(result["ntnb_status"], "DEFASADO")
+        self.assertEqual(result["cdi_status"], "DEFASADO")
+        self.assertEqual(result["ntnb_vencimento"], date(2040, 8, 15))
 
     @patch("src.collector._download_zip")
     def test_b3_escolhe_ultimo_fechamento_ate_data(self, download):

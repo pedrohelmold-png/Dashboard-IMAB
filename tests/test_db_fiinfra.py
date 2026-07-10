@@ -41,6 +41,7 @@ class DbFiInfraTests(unittest.TestCase):
         ultimo = get_ultimo_fiinfra_snapshot(self.db_path)
         self.assertEqual(ultimo["observacao"], "revisado")
         self.assertEqual(ultimo["venda_bloqueada"], 0)
+        self.assertIn("ntnb_status", ultimo)
         self.assertEqual(len(load_fiinfra_snapshots(db_path=self.db_path)), 1)
         fundos_salvos = load_fiinfra_fundos(date(2026, 7, 10), self.db_path)
         self.assertEqual(fundos_salvos["ticker"].tolist(), ["IFRA11"])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 import pandas as pd
@@ -78,18 +78,22 @@ def render_regua_fiinfra() -> None:
     if atualizar:
         with st.spinner("Baixando dados ANBIMA, BCB, B3 e CVM..."):
             erros = []
+            target_duration = _duration_alvo()
             try:
-                st.session_state["fiinfra_auto_macro"] = fetch_fiinfra_macro(ref_date)
+                st.session_state["fiinfra_auto_macro"] = fetch_fiinfra_macro(
+                    ref_date, target_duration=target_duration
+                )
             except Exception as exc:
                 erros.append(f"macro: {exc}")
             try:
                 st.session_state["fiinfra_auto_fundos"] = fetch_fiinfra_fundos(ref_date)
             except Exception as exc:
                 erros.append(f"fundos: {exc}")
-        if erros:
-            st.warning("Atualizacao parcial. " + " | ".join(erros))
-        else:
-            st.success("Dados oficiais atualizados.")
+        _render_update_result(
+            st.session_state.get("fiinfra_auto_macro", {}),
+            st.session_state.get("fiinfra_auto_fundos", []),
+            erros,
+        )
 
     auto_macro = st.session_state.get("fiinfra_auto_macro", {})
     input_cols = st.columns([1, 1, 1, 1])
@@ -116,6 +120,17 @@ def render_regua_fiinfra() -> None:
         )
     with input_cols[3]:
         st.metric("Fonte macro", auto_macro.get("fonte", "Ultimo snapshot/manual"))
+
+    if auto_macro:
+        vencimento = auto_macro.get("ntnb_vencimento")
+        st.caption(
+            f"NTN-B de referencia: {vencimento or 'indisponivel'} | "
+            f"duration { _fmt(auto_macro.get('ntnb_duration'), ' anos') } | "
+            f"data-base {auto_macro.get('ntnb_data') or 'N/D'} | "
+            f"status {auto_macro.get('ntnb_status', 'FALLBACK')}. "
+            f"CDI: {auto_macro.get('cdi_data') or 'N/D'} "
+            f"({auto_macro.get('cdi_status', 'FALLBACK')})."
+        )
 
     macro_cols = st.columns([1, 1, 1])
     with macro_cols[0]:
@@ -177,6 +192,8 @@ def render_regua_fiinfra() -> None:
             "duration": st.column_config.NumberColumn("Duration", format="%.2f"),
             "mercado_data": st.column_config.DateColumn("Data mercado", disabled=True),
             "patrimonial_data": st.column_config.DateColumn("Data patrimonial", disabled=True),
+            "mercado_status": st.column_config.TextColumn("Status mercado", disabled=True),
+            "patrimonial_status": st.column_config.TextColumn("Status patrimonial", disabled=True),
         },
     )
 
@@ -229,6 +246,7 @@ def render_regua_fiinfra() -> None:
             yield_fundo_real=yield_fundo_real,
             execucao=execucao,
             observacao=observacao,
+            auto_macro=auto_macro,
         )
         upsert_fiinfra_snapshot(snapshot, fundos_calc)
         st.success("Snapshot FI-Infra salvo.")
@@ -488,6 +506,8 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
                 "duration": anterior.get("duration", 8.0),
                 "mercado_data": fundo.get("cota_mercado_data"),
                 "patrimonial_data": fundo.get("cota_patrimonial_data"),
+                "mercado_status": fundo.get("cota_mercado_status"),
+                "patrimonial_status": fundo.get("cota_patrimonial_status"),
             })
         return pd.DataFrame(rows)
     if not latest.empty:
@@ -520,7 +540,9 @@ def _snapshot_payload(
     yield_fundo_real: Optional[float],
     execucao: dict,
     observacao: str,
+    auto_macro: Optional[dict] = None,
 ) -> dict:
+    auto_macro = auto_macro or {}
     return {
         "data": ref_date,
         "ntnb": ntnb,
@@ -544,6 +566,15 @@ def _snapshot_payload(
         "destino": execucao["destino"],
         "venda_bloqueada": execucao["bloqueada"],
         "observacao": observacao,
+        "ntnb_vencimento": auto_macro.get("ntnb_vencimento"),
+        "ntnb_duration_ref": auto_macro.get("ntnb_duration"),
+        "ntnb_data": auto_macro.get("ntnb_data"),
+        "ntnb_status": auto_macro.get("ntnb_status", "MANUAL"),
+        "cdi_data": auto_macro.get("cdi_data"),
+        "cdi_status": auto_macro.get("cdi_status", "MANUAL"),
+        "inflacao_data": auto_macro.get("inflacao_data"),
+        "inflacao_status": auto_macro.get("inflacao_status", "MANUAL"),
+        "coletado_em": datetime.now().isoformat(timespec="seconds"),
     }
 
 
@@ -567,6 +598,40 @@ def _auto_or_fallback(
     if value is not None and not pd.isna(value):
         return float(value)
     return _fallback_float(row, row_key, fallback)
+
+
+def _duration_alvo() -> Optional[float]:
+    latest = load_fiinfra_fundos()
+    if latest.empty or "duration" not in latest:
+        return 8.0
+    values = pd.to_numeric(latest["duration"], errors="coerce").dropna()
+    values = values[values > 0]
+    return float(values.median()) if not values.empty else 8.0
+
+
+def _render_update_result(macro: dict, fundos: list[dict], erros: list[str]) -> None:
+    statuses = [
+        macro.get("ntnb_status", "INDISPONIVEL"),
+        macro.get("cdi_status", "INDISPONIVEL"),
+        macro.get("inflacao_status", "INDISPONIVEL"),
+    ]
+    for fundo in fundos:
+        statuses.extend([
+            fundo.get("cota_mercado_status", "INDISPONIVEL"),
+            fundo.get("cota_patrimonial_status", "INDISPONIVEL"),
+        ])
+    atualizados = statuses.count("ATUALIZADO")
+    defasados = statuses.count("DEFASADO")
+    indisponiveis = statuses.count("INDISPONIVEL")
+    mensagem = (
+        f"Coleta concluida: {atualizados} atualizados, {defasados} defasados e "
+        f"{indisponiveis} indisponiveis."
+    )
+    if erros or defasados or indisponiveis:
+        detalhe = f" Falhas: {' | '.join(erros)}" if erros else ""
+        st.warning(mensagem + detalhe)
+    else:
+        st.success(mensagem)
 
 
 def _ultimo_imab_value(row: Optional[dict], key: str, fallback: float) -> float:

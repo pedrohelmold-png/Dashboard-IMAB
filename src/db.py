@@ -123,6 +123,15 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     destino                   TEXT,
     venda_bloqueada           INTEGER DEFAULT 0,
     observacao                TEXT,
+    ntnb_vencimento           TEXT,
+    ntnb_duration_ref         REAL,
+    ntnb_data                 TEXT,
+    ntnb_status               TEXT,
+    cdi_data                  TEXT,
+    cdi_status                TEXT,
+    inflacao_data             TEXT,
+    inflacao_status           TEXT,
+    coletado_em               TEXT,
     atualizado_em             TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -193,6 +202,12 @@ def init_db_fiinfra(db_path=None) -> None:
     """Cria as tabelas da Regua FI-Infra se nao existirem. Idempotente."""
     with _conn(db_path) as conn:
         conn.executescript(_SCHEMA_FIINFRA)
+        _ensure_columns(conn, "fiinfra_snapshots", {
+            "ntnb_vencimento": "TEXT", "ntnb_duration_ref": "REAL",
+            "ntnb_data": "TEXT", "ntnb_status": "TEXT", "cdi_data": "TEXT",
+            "cdi_status": "TEXT", "inflacao_data": "TEXT",
+            "inflacao_status": "TEXT", "coletado_em": "TEXT",
+        })
         for chave, valor in DEFAULT_THRESHOLDS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO fiinfra_thresholds (chave, valor) VALUES (?, ?)",
@@ -271,6 +286,14 @@ def upsert_fiinfra_snapshot(
     """Grava a foto consolidada da regua e os dados por fundo."""
     row = {**snapshot, "data": str(snapshot["data"])}
     row["venda_bloqueada"] = int(bool(row.get("venda_bloqueada", False)))
+    for key in (
+        "ntnb_vencimento", "ntnb_duration_ref", "ntnb_data", "ntnb_status",
+        "cdi_data", "cdi_status", "inflacao_data", "inflacao_status", "coletado_em",
+    ):
+        row.setdefault(key, None)
+    for key in ("ntnb_vencimento", "ntnb_data", "cdi_data", "inflacao_data", "coletado_em"):
+        if row[key] is not None:
+            row[key] = str(row[key])
 
     with _conn(db_path) as conn:
         conn.execute("""
@@ -279,13 +302,17 @@ def upsert_fiinfra_snapshot(
                juro_estado, spread_estado, excesso_estado,
                juro_pos, spread_pos, excesso_pos, mandato, cdi, aliquota,
                inflacao_implicita, alternativa_liquida_real, yield_fundo_real,
-               acao, destino, venda_bloqueada, observacao)
+               acao, destino, venda_bloqueada, observacao,
+               ntnb_vencimento, ntnb_duration_ref, ntnb_data, ntnb_status,
+               cdi_data, cdi_status, inflacao_data, inflacao_status, coletado_em)
             VALUES
               (:data, :ntnb, :spread, :excesso_mediano, :duration_mediana, :zona,
                :juro_estado, :spread_estado, :excesso_estado,
                :juro_pos, :spread_pos, :excesso_pos, :mandato, :cdi, :aliquota,
                :inflacao_implicita, :alternativa_liquida_real, :yield_fundo_real,
-               :acao, :destino, :venda_bloqueada, :observacao)
+               :acao, :destino, :venda_bloqueada, :observacao,
+               :ntnb_vencimento, :ntnb_duration_ref, :ntnb_data, :ntnb_status,
+               :cdi_data, :cdi_status, :inflacao_data, :inflacao_status, :coletado_em)
         """, row)
 
         conn.execute("DELETE FROM fiinfra_fundos_snapshot WHERE data = ?", (row["data"],))
@@ -459,3 +486,11 @@ def load_fiinfra_tranches(limit: int = 100, db_path=None) -> pd.DataFrame:
             parse_dates=["data"],
         )
     return df
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
+    """Adiciona colunas novas sem quebrar bancos criados por versoes anteriores."""
+    existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for nome, tipo in columns.items():
+        if nome not in existentes:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {nome} {tipo}")
