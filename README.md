@@ -39,10 +39,22 @@ servidor aberto ha varios dias. B3 e CVM sao tratadas independentemente para
 preservar resultados parciais. A recomendacao operacional exige ao menos tres
 dos quatro fundos com dados completos.
 
+O snapshot da Regua FI-Infra guarda a proveniencia dos principais campos: lote
+de coleta, data solicitada, fontes macro, valor original coletado, status de
+SLA e indicacao de override manual. Os limiares usados na classificacao tambem
+ficam congelados no snapshot para auditoria historica.
+
+Nos fundos, a regua preserva CNPJ, fonte, data-base, status e valor original
+das cotas de mercado e patrimonial. Um fundo deixa de entrar na mediana quando
+tem dados incompletos ou quando B3 e CVM estao desalinhadas por mais de um dia
+util. Alteracoes manuais nas cotas sao marcadas como override.
+
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e
-reutilizado como fallback.
+reutilizado como fallback. Quando taxa ou duration ainda sao estimativas, o
+salvamento exige confirmacao; depois de confirmado, o status fica gravado como
+manual confirmado.
 
 As taxas e descontos usam pontos percentuais (por exemplo, `6.5` para 6,5%), o
 spread usa pontos-base e a aliquota e armazenada em decimal.

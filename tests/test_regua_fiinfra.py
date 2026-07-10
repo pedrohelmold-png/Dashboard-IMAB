@@ -1,5 +1,6 @@
 import math
 import unittest
+from datetime import date
 
 from src.regua_fiinfra import (
     ESTADO_BARATO,
@@ -54,7 +55,7 @@ class ReguaFiInfraTests(unittest.TestCase):
         self.assertEqual(fundos[0]["ticker"], "IFRA11")
         self.assertAlmostEqual(calcular_desconto_observado(90, 100), 10.0)
         self.assertAlmostEqual(excesso, 6.0)
-        self.assertEqual(duration, 9.0)
+        self.assertEqual(duration, 8.0)
         self.assertIsNone(fundos[1]["excesso_desconto"])
 
     def test_preparar_fundos_rejeita_valores_infinitos(self):
@@ -64,7 +65,28 @@ class ReguaFiInfraTests(unittest.TestCase):
         }])
         self.assertIsNone(fundos[0]["cota_mercado"])
         self.assertIsNone(excesso)
-        self.assertEqual(duration, 8)
+        self.assertIsNone(duration)
+
+    def test_fundo_com_datas_desalinhadas_e_excluido(self):
+        fundos, excesso, duration = preparar_fundos([{
+            "ticker": "IFRA11", "cota_mercado": 90, "cota_patrimonial": 100,
+            "taxa_total_aa": 0.5, "duration": 8,
+            "mercado_data": date(2026, 7, 10),
+            "patrimonial_data": date(2026, 7, 7),
+        }])
+        self.assertFalse(fundos[0]["elegivel"])
+        self.assertEqual(fundos[0]["motivo_exclusao"], "datas_b3_cvm_desalinhadas")
+        self.assertIsNone(excesso)
+        self.assertIsNone(duration)
+
+    def test_override_de_cota_e_identificado(self):
+        fundos, _, _ = preparar_fundos([{
+            "ticker": "IFRA11", "cota_mercado": 91, "cota_mercado_original": 90,
+            "cota_patrimonial": 100, "cota_patrimonial_original": 100,
+            "taxa_total_aa": 0.5, "duration": 8,
+        }])
+        self.assertTrue(fundos[0]["cota_mercado_override"])
+        self.assertFalse(fundos[0]["cota_patrimonial_override"])
 
     def test_carry_e_cdi_real(self):
         self.assertAlmostEqual(calcular_yield_fundo_real(6.0, 100, 4.0, 8.0), 7.5)

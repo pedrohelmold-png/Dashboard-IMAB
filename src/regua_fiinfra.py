@@ -9,6 +9,7 @@ Convencoes de unidades:
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, timedelta
 from statistics import median
 from typing import Iterable, Optional
 
@@ -131,15 +132,36 @@ def preparar_fundos(fundos: Iterable[dict]) -> tuple[list[dict], Optional[float]
         cota_patrimonial = _to_float(fundo.get("cota_patrimonial"))
         taxa_total_aa = _to_float(fundo.get("taxa_total_aa"))
         duration = _to_float(fundo.get("duration"))
+        mercado_data = _to_date(fundo.get("mercado_data"))
+        patrimonial_data = _to_date(fundo.get("patrimonial_data"))
+        mercado_original = _to_float(
+            fundo.get("cota_mercado_original", cota_mercado)
+        )
+        patrimonial_original = _to_float(
+            fundo.get("cota_patrimonial_original", cota_patrimonial)
+        )
 
         desconto_observado = calcular_desconto_observado(cota_mercado, cota_patrimonial)
         desconto_justo = calcular_desconto_justo(taxa_total_aa, duration)
         excesso_desconto = None
+        motivo_exclusao = None
+        if desconto_observado is None or desconto_justo is None:
+            motivo_exclusao = "dados_incompletos"
+        elif mercado_data and patrimonial_data:
+            gap = _business_days_gap(
+                min(mercado_data, patrimonial_data),
+                max(mercado_data, patrimonial_data),
+            )
+            if gap > 1:
+                motivo_exclusao = "datas_b3_cvm_desalinhadas"
+
+        elegivel = motivo_exclusao is None
         if desconto_observado is not None and desconto_justo is not None:
             excesso_desconto = desconto_observado - desconto_justo
-            excessos_validos.append(excesso_desconto)
+            if elegivel:
+                excessos_validos.append(excesso_desconto)
 
-        if duration is not None and duration > 0:
+        if elegivel and duration is not None and duration > 0:
             durations_validas.append(duration)
 
         linhas.append({
@@ -151,6 +173,21 @@ def preparar_fundos(fundos: Iterable[dict]) -> tuple[list[dict], Optional[float]
             "desconto_observado": desconto_observado,
             "desconto_justo": desconto_justo,
             "excesso_desconto": excesso_desconto,
+            "elegivel": elegivel,
+            "motivo_exclusao": motivo_exclusao,
+            "cnpj": fundo.get("cnpj"),
+            "cota_mercado_original": mercado_original,
+            "cota_mercado_data": mercado_data,
+            "cota_mercado_fonte": fundo.get("cota_mercado_fonte"),
+            "cota_mercado_status": fundo.get("mercado_status") or fundo.get("cota_mercado_status"),
+            "cota_mercado_override": _changed(cota_mercado, mercado_original),
+            "cota_patrimonial_original": patrimonial_original,
+            "cota_patrimonial_data": patrimonial_data,
+            "cota_patrimonial_fonte": fundo.get("cota_patrimonial_fonte"),
+            "cota_patrimonial_status": fundo.get("patrimonial_status") or fundo.get("cota_patrimonial_status"),
+            "cota_patrimonial_override": _changed(cota_patrimonial, patrimonial_original),
+            "taxa_total_status": fundo.get("taxa_total_status"),
+            "duration_status": fundo.get("duration_status"),
         })
 
     excesso_mediano = median(excessos_validos) if excessos_validos else None
@@ -294,3 +331,32 @@ def _to_float(value) -> Optional[float]:
         return parsed
     except (TypeError, ValueError):
         return None
+
+
+def _to_date(value) -> Optional[date]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _business_days_gap(start: date, end: date) -> int:
+    current = start + timedelta(days=1)
+    total = 0
+    while current <= end:
+        if current.weekday() < 5:
+            total += 1
+        current += timedelta(days=1)
+    return total
+
+
+def _changed(effective: Optional[float], original: Optional[float]) -> bool:
+    if effective is None or original is None:
+        return effective != original
+    return not math.isclose(effective, original, rel_tol=1e-9, abs_tol=1e-9)

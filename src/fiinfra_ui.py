@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import math
 from typing import Optional
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ import streamlit as st
 from src.collector import fetch_fiinfra_fundos_result, fetch_fiinfra_macro
 from src.db import (
     get_ultimo_carrego,
+    get_fiinfra_snapshot,
     get_ultimo_fiinfra_snapshot,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
@@ -241,6 +243,13 @@ def render_regua_fiinfra() -> None:
             "patrimonial_data": st.column_config.DateColumn("Data patrimonial", disabled=True),
             "mercado_status": st.column_config.TextColumn("Status mercado", disabled=True),
             "patrimonial_status": st.column_config.TextColumn("Status patrimonial", disabled=True),
+            "cnpj": st.column_config.TextColumn("CNPJ", disabled=True),
+            "cota_mercado_fonte": st.column_config.TextColumn("Fonte mercado", disabled=True),
+            "cota_patrimonial_fonte": st.column_config.TextColumn("Fonte patrimonial", disabled=True),
+            "taxa_total_status": st.column_config.TextColumn("Status taxa", disabled=True),
+            "duration_status": st.column_config.TextColumn("Status duration", disabled=True),
+            "cota_mercado_original": None,
+            "cota_patrimonial_original": None,
         },
         key=f"fiinfra_fundos_editor_{collection_id}",
     )
@@ -249,7 +258,7 @@ def render_regua_fiinfra() -> None:
         fundos_editados.to_dict("records")
     )
     fundos_df = pd.DataFrame(fundos_calc)
-    cobertura = sum(row.get("excesso_desconto") is not None for row in fundos_calc)
+    cobertura = sum(bool(row.get("elegivel")) for row in fundos_calc)
     st.caption(f"Cobertura do sinal de desconto: {cobertura}/{len(fundos_calc)} fundos válidos.")
 
     if cobertura < 3:
@@ -283,13 +292,56 @@ def render_regua_fiinfra() -> None:
     _render_fundos_calculados(fundos_df)
 
     observacao = st.text_area("Observacao do snapshot", height=80)
-    if st.button("Salvar snapshot semanal", type="primary"):
+    macro_overrides = sum(
+        _field_provenance(auto_macro, key, value)["override"]
+        for key, value in (
+            ("ntnb", ntnb), ("cdi", cdi),
+            ("inflacao_implicita", inflacao_implicita), ("ipca_focus", ipca_focus),
+        )
+    )
+    fund_overrides = sum(
+        int(bool(row.get("cota_mercado_override")))
+        + int(bool(row.get("cota_patrimonial_override")))
+        for row in fundos_calc
+    )
+    estimativas = sum(
+        row.get("taxa_total_status") == "ESTIMATIVA_NAO_CONFIRMADA"
+        or row.get("duration_status") == "ESTIMATIVA_NAO_CONFIRMADA"
+        for row in fundos_calc
+    )
+    quality_issues = []
+    if not collection:
+        quality_issues.append("snapshot sem lote de coleta oficial para a data")
+    quality_issues.extend(collection.get("erros", []))
+    if macro_overrides or fund_overrides:
+        quality_issues.append(
+            f"{macro_overrides + fund_overrides} campo(s) com override manual"
+        )
+    if estimativas:
+        quality_issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
+    existente = get_fiinfra_snapshot(ref_date)
+    if existente:
+        quality_issues.append("ja existe snapshot nesta data; o registro sera substituido")
+
+    confirmar = True
+    if quality_issues:
+        st.warning("Revisao necessaria antes de salvar: " + " | ".join(quality_issues))
+        confirmar = st.checkbox(
+            "Confirmo os fallbacks, overrides e/ou substituicao descritos acima.",
+            key=f"fiinfra_confirm_quality_{collection_id}",
+        )
+
+    if st.button(
+        "Salvar snapshot semanal", type="primary", disabled=not confirmar
+    ):
+        fundos_para_salvar = _confirmar_estimativas_fundos(fundos_calc)
         snapshot = _snapshot_payload(
             ref_date=ref_date,
             ntnb=ntnb,
             spread=spread,
             excesso_mediano=excesso_mediano,
             duration_mediana=duration_mediana,
+            cobertura_fundos=cobertura,
             avaliacao=avaliacao,
             mandato=mandato,
             cdi=cdi,
@@ -303,8 +355,9 @@ def render_regua_fiinfra() -> None:
             execucao=execucao,
             observacao=observacao,
             auto_macro=auto_macro,
+            collection=collection,
         )
-        upsert_fiinfra_snapshot(snapshot, fundos_calc)
+        upsert_fiinfra_snapshot(snapshot, fundos_para_salvar)
         st.success("Snapshot FI-Infra salvo.")
         st.rerun()
 
@@ -426,6 +479,10 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
             "desconto_observado": st.column_config.NumberColumn("Desconto observado", format="%.2f p.p."),
             "desconto_justo": st.column_config.NumberColumn("Desconto justo", format="%.2f p.p."),
             "excesso_desconto": st.column_config.NumberColumn("Excesso", format="%.2f p.p."),
+            "elegivel": st.column_config.CheckboxColumn("Elegível"),
+            "motivo_exclusao": st.column_config.TextColumn("Motivo exclusão"),
+            "cota_mercado_override": st.column_config.CheckboxColumn("Override mercado"),
+            "cota_patrimonial_override": st.column_config.CheckboxColumn("Override patrimonial"),
         },
     )
 
@@ -551,7 +608,13 @@ def _add_signal_trace(
 
 def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
     latest = load_fiinfra_fundos()
-    columns = ["ticker", "cota_mercado", "cota_patrimonial", "taxa_total_aa", "duration"]
+    columns = [
+        "ticker", "cnpj", "cota_mercado", "cota_mercado_original",
+        "cota_mercado_data", "cota_mercado_fonte", "cota_mercado_status",
+        "cota_patrimonial", "cota_patrimonial_original", "cota_patrimonial_data",
+        "cota_patrimonial_fonte", "cota_patrimonial_status", "taxa_total_aa",
+        "taxa_total_status", "duration", "duration_status",
+    ]
     if dados_auto:
         anteriores = latest.set_index("ticker").to_dict("index") if not latest.empty else {}
         rows = []
@@ -560,10 +623,21 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
             anterior = anteriores.get(ticker, {})
             rows.append({
                 "ticker": ticker,
+                "cnpj": fundo.get("cnpj"),
                 "cota_mercado": fundo.get("cota_mercado"),
+                "cota_mercado_original": fundo.get("cota_mercado"),
                 "cota_patrimonial": fundo.get("cota_patrimonial"),
-                "taxa_total_aa": anterior.get("taxa_total_aa", 1.0),
-                "duration": anterior.get("duration", 8.0),
+                "cota_patrimonial_original": fundo.get("cota_patrimonial"),
+                "cota_mercado_fonte": fundo.get("cota_mercado_fonte"),
+                "cota_patrimonial_fonte": fundo.get("cota_patrimonial_fonte"),
+                "taxa_total_aa": _prior_or_default(anterior, "taxa_total_aa", 1.0),
+                "duration": _prior_or_default(anterior, "duration", 8.0),
+                "taxa_total_status": anterior.get("taxa_total_status") or (
+                    "HISTORICO" if anterior else "ESTIMATIVA_NAO_CONFIRMADA"
+                ),
+                "duration_status": anterior.get("duration_status") or (
+                    "HISTORICO" if anterior else "ESTIMATIVA_NAO_CONFIRMADA"
+                ),
                 "mercado_data": fundo.get("cota_mercado_data"),
                 "patrimonial_data": fundo.get("cota_patrimonial_data"),
                 "mercado_status": fundo.get("cota_mercado_status"),
@@ -571,15 +645,26 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
             })
         return pd.DataFrame(rows)
     if not latest.empty:
-        return latest[columns].copy()
+        result = latest[[col for col in columns if col in latest.columns]].copy()
+        return result.rename(columns={
+            "cota_mercado_data": "mercado_data",
+            "cota_mercado_status": "mercado_status",
+            "cota_patrimonial_data": "patrimonial_data",
+            "cota_patrimonial_status": "patrimonial_status",
+        })
 
     return pd.DataFrame([
         {
             "ticker": ticker,
+            "cnpj": None,
             "cota_mercado": None,
+            "cota_mercado_original": None,
             "cota_patrimonial": None,
+            "cota_patrimonial_original": None,
             "taxa_total_aa": 1.0,
+            "taxa_total_status": "ESTIMATIVA_NAO_CONFIRMADA",
             "duration": 8.0,
+            "duration_status": "ESTIMATIVA_NAO_CONFIRMADA",
         }
         for ticker in FUNDOS_PADRAO
     ])
@@ -591,6 +676,7 @@ def _snapshot_payload(
     spread: float,
     excesso_mediano: float,
     duration_mediana: Optional[float],
+    cobertura_fundos: int,
     avaliacao: dict,
     mandato: str,
     cdi: float,
@@ -604,11 +690,31 @@ def _snapshot_payload(
     execucao: dict,
     observacao: str,
     auto_macro: Optional[dict] = None,
+    collection: Optional[dict] = None,
 ) -> dict:
     auto_macro = auto_macro or {}
+    collection = collection or {}
+    ntnb_meta = _field_provenance(auto_macro, "ntnb", ntnb)
+    cdi_meta = _field_provenance(auto_macro, "cdi", cdi)
+    implicita_meta = _field_provenance(auto_macro, "inflacao_implicita", inflacao_implicita)
+    focus_meta = _field_provenance(auto_macro, "ipca_focus", ipca_focus)
+    thresholds = avaliacao.get("thresholds", {})
     return {
         "data": ref_date,
+        "collection_id": collection.get("collection_id"),
+        "data_solicitada": collection.get("data_solicitada", ref_date),
+        "metodologia_version": "v1",
+        "cobertura_fundos": cobertura_fundos,
+        "juro_real_caro_ref": thresholds.get("juro_real_caro"),
+        "juro_real_barato_ref": thresholds.get("juro_real_barato"),
+        "spread_caro_ref": thresholds.get("spread_caro"),
+        "spread_barato_ref": thresholds.get("spread_barato"),
+        "excesso_caro_ref": thresholds.get("excesso_caro"),
+        "excesso_barato_ref": thresholds.get("excesso_barato"),
         "ntnb": ntnb,
+        "ntnb_original": ntnb_meta["original"],
+        "ntnb_fonte": ntnb_meta["fonte"],
+        "ntnb_override": ntnb_meta["override"],
         "spread": spread,
         "excesso_mediano": excesso_mediano,
         "duration_mediana": duration_mediana,
@@ -621,11 +727,20 @@ def _snapshot_payload(
         "excesso_pos": avaliacao["posicoes"]["excesso_desconto"],
         "mandato": mandato,
         "cdi": cdi,
+        "cdi_original": cdi_meta["original"],
+        "cdi_fonte": cdi_meta["fonte"],
+        "cdi_override": cdi_meta["override"],
         "aliquota": aliquota,
         "inflacao_implicita": inflacao_implicita,
+        "inflacao_original": implicita_meta["original"],
+        "inflacao_fonte": implicita_meta["fonte"],
+        "inflacao_override": implicita_meta["override"],
         "ipca_focus": ipca_focus,
+        "ipca_focus_original": focus_meta["original"],
+        "ipca_focus_fonte": focus_meta["fonte"],
+        "ipca_focus_override": focus_meta["override"],
         "ipca_focus_data": auto_macro.get("ipca_focus_data"),
-        "ipca_focus_status": auto_macro.get("ipca_focus_status", "MANUAL"),
+        "ipca_focus_status": focus_meta["status"],
         "inflacao_usada": inflacao_usada,
         "inflacao_usada_fonte": inflacao_usada_fonte,
         "alternativa_liquida_real": alternativa_liquida_real,
@@ -637,13 +752,27 @@ def _snapshot_payload(
         "ntnb_vencimento": auto_macro.get("ntnb_vencimento"),
         "ntnb_duration_ref": auto_macro.get("ntnb_duration"),
         "ntnb_data": auto_macro.get("ntnb_data"),
-        "ntnb_status": auto_macro.get("ntnb_status", "MANUAL"),
+        "ntnb_status": ntnb_meta["status"],
         "cdi_data": auto_macro.get("cdi_data"),
-        "cdi_status": auto_macro.get("cdi_status", "MANUAL"),
+        "cdi_status": cdi_meta["status"],
         "inflacao_data": auto_macro.get("inflacao_data"),
-        "inflacao_status": auto_macro.get("inflacao_status", "MANUAL"),
-        "coletado_em": datetime.now().isoformat(timespec="seconds"),
+        "inflacao_status": implicita_meta["status"],
+        "coletado_em": collection.get(
+            "coletado_em", datetime.now().isoformat(timespec="seconds")
+        ),
     }
+
+
+def _confirmar_estimativas_fundos(fundos: list[dict]) -> list[dict]:
+    confirmados = []
+    for fundo in fundos:
+        row = dict(fundo)
+        if row.get("taxa_total_status") == "ESTIMATIVA_NAO_CONFIRMADA":
+            row["taxa_total_status"] = "MANUAL_CONFIRMADO"
+        if row.get("duration_status") == "ESTIMATIVA_NAO_CONFIRMADA":
+            row["duration_status"] = "MANUAL_CONFIRMADO"
+        confirmados.append(row)
+    return confirmados
 
 
 def _fallback_float(row: Optional[dict], key: str, fallback: float) -> float:
@@ -668,6 +797,40 @@ def _auto_or_fallback(
     return _fallback_float(row, row_key, fallback)
 
 
+def _prior_or_default(row: dict, key: str, fallback: float) -> float:
+    value = row.get(key)
+    if value is None or pd.isna(value):
+        return float(fallback)
+    return float(value)
+
+
+def _field_provenance(auto: dict, key: str, effective: float) -> dict:
+    original = auto.get(key)
+    override = False
+    if original is not None and not pd.isna(original):
+        override = not math.isclose(
+            float(effective), float(original), rel_tol=1e-9, abs_tol=1e-9
+        )
+    source_key = {
+        "ntnb": "ntnb_fonte",
+        "cdi": "cdi_fonte",
+        "inflacao_implicita": "inflacao_fonte",
+        "ipca_focus": "ipca_focus_fonte",
+    }[key]
+    status_key = {
+        "ntnb": "ntnb_status",
+        "cdi": "cdi_status",
+        "inflacao_implicita": "inflacao_status",
+        "ipca_focus": "ipca_focus_status",
+    }[key]
+    return {
+        "original": original,
+        "override": override,
+        "fonte": auto.get(source_key) or "manual_ou_snapshot_anterior",
+        "status": "OVERRIDE_MANUAL" if override else auto.get(status_key, "MANUAL"),
+    }
+
+
 def _duration_alvo() -> Optional[float]:
     latest = load_fiinfra_fundos()
     if latest.empty or "duration" not in latest:
@@ -690,11 +853,12 @@ def _render_update_result(macro: dict, fundos: list[dict], erros: list[str]) -> 
             fundo.get("cota_patrimonial_status", "INDISPONIVEL"),
         ])
     atualizados = statuses.count("ATUALIZADO")
+    dentro_sla = statuses.count("DENTRO_SLA")
     defasados = statuses.count("DEFASADO")
     indisponiveis = statuses.count("INDISPONIVEL")
     mensagem = (
-        f"Coleta concluida: {atualizados} atualizados, {defasados} defasados e "
-        f"{indisponiveis} indisponiveis."
+        f"Coleta concluida: {atualizados} na data, {dentro_sla} dentro do SLA, "
+        f"{defasados} defasados e {indisponiveis} indisponiveis."
     )
     if erros or defasados or indisponiveis:
         detalhe = f" Falhas: {' | '.join(erros)}" if erros else ""

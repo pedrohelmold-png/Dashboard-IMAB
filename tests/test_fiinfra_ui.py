@@ -4,6 +4,9 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from src.fiinfra_ui import _confirmar_estimativas_fundos, _snapshot_payload
+from src.regua_fiinfra import avaliar_sinais
+
 
 def _macro(ref_date):
     return {
@@ -70,6 +73,66 @@ class FiInfraUiTests(unittest.TestCase):
             at.run()
             self.assertFalse(at.exception)
             self.assertTrue(any("juro real" in item.value for item in at.error))
+
+    def test_snapshot_payload_guarda_metodologia_limiares_e_overrides(self):
+        ref = date(2026, 7, 10)
+        avaliacao = avaliar_sinais(7.0, 120, 5.0)
+        payload = _snapshot_payload(
+            ref_date=ref,
+            ntnb=7.1,
+            spread=120,
+            excesso_mediano=5.0,
+            duration_mediana=8.0,
+            cobertura_fundos=4,
+            avaliacao=avaliacao,
+            mandato="Juro real",
+            cdi=14.0,
+            aliquota=0.15,
+            inflacao_implicita=6.0,
+            ipca_focus=4.5,
+            inflacao_usada=4.5,
+            inflacao_usada_fonte="focus",
+            alternativa_liquida_real=6.0,
+            yield_fundo_real=8.0,
+            execucao={"acao": "Compra", "destino": "FI-Infra", "bloqueada": False},
+            observacao="teste",
+            auto_macro={
+                "ntnb": 7.0,
+                "ntnb_fonte": "ANBIMA",
+                "ntnb_status": "ATUALIZADO",
+                "cdi": 14.0,
+                "cdi_fonte": "BCB",
+                "cdi_status": "ATUALIZADO",
+                "inflacao_implicita": 6.0,
+                "inflacao_fonte": "ANBIMA",
+                "inflacao_status": "ATUALIZADO",
+                "ipca_focus": 4.5,
+                "ipca_focus_fonte": "BCB Focus",
+                "ipca_focus_status": "DENTRO_SLA",
+            },
+            collection={"collection_id": "abc", "data_solicitada": ref},
+        )
+
+        self.assertEqual(payload["metodologia_version"], "v1")
+        self.assertEqual(payload["cobertura_fundos"], 4)
+        self.assertEqual(payload["juro_real_barato_ref"], avaliacao["thresholds"]["juro_real_barato"])
+        self.assertEqual(payload["collection_id"], "abc")
+        self.assertEqual(payload["ntnb_original"], 7.0)
+        self.assertTrue(payload["ntnb_override"])
+        self.assertFalse(payload["cdi_override"])
+
+    def test_confirmacao_marca_estimativas_como_confirmadas(self):
+        fundos = [{
+            "ticker": "IFRA11",
+            "taxa_total_status": "ESTIMATIVA_NAO_CONFIRMADA",
+            "duration_status": "ESTIMATIVA_NAO_CONFIRMADA",
+        }]
+
+        confirmados = _confirmar_estimativas_fundos(fundos)
+
+        self.assertEqual(confirmados[0]["taxa_total_status"], "MANUAL_CONFIRMADO")
+        self.assertEqual(confirmados[0]["duration_status"], "MANUAL_CONFIRMADO")
+        self.assertEqual(fundos[0]["taxa_total_status"], "ESTIMATIVA_NAO_CONFIRMADA")
 
 
 if __name__ == "__main__":

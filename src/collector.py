@@ -224,15 +224,19 @@ def fetch_fiinfra_macro(
         "ntnb_duration": None,
         "ntnb_data": None,
         "ntnb_status": "INDISPONIVEL",
+        "ntnb_fonte": "ANBIMA taxas indicativas via pyield",
         "cdi": None,
         "cdi_data": None,
         "cdi_status": "INDISPONIVEL",
+        "cdi_fonte": "DI Over BCB/B3 via pyield",
         "inflacao_implicita": None,
         "inflacao_data": None,
         "inflacao_status": "INDISPONIVEL",
+        "inflacao_fonte": "Breakeven da NTN-B de referencia",
         "ipca_focus": None,
         "ipca_focus_data": None,
         "ipca_focus_status": "INDISPONIVEL",
+        "ipca_focus_fonte": "BCB Focus IPCA 12m suavizado",
         "fonte": "ANBIMA + BCB Focus/DI",
     }
 
@@ -241,7 +245,9 @@ def fetch_fiinfra_macro(
         resultado.update({
             "ipca_focus": focus["valor"],
             "ipca_focus_data": focus["data"],
-            "ipca_focus_status": _freshness_status(focus["data"], ref_date),
+            "ipca_focus_status": _freshness_status(
+                focus["data"], ref_date, max_business_days=5
+            ),
         })
 
     for data_busca in _lookback_dates(ref_date, lookback_days):
@@ -258,14 +264,18 @@ def fetch_fiinfra_macro(
             "ntnb_vencimento": row.get("data_vencimento"),
             "ntnb_duration": _percent_or_decimal(row.get("duration"), percent=False),
             "ntnb_data": data_busca,
-            "ntnb_status": _freshness_status(data_busca, ref_date),
+            "ntnb_status": _freshness_status(
+                data_busca, ref_date, max_business_days=1
+            ),
         })
         implicita = _percent_or_decimal(row.get("inflacao_implicita"))
         if implicita is not None:
             resultado.update({
                 "inflacao_implicita": implicita * 100,
                 "inflacao_data": data_busca,
-                "inflacao_status": _freshness_status(data_busca, ref_date),
+                "inflacao_status": _freshness_status(
+                    data_busca, ref_date, max_business_days=1
+                ),
             })
         break
 
@@ -275,7 +285,9 @@ def fetch_fiinfra_macro(
             resultado.update({
                 "cdi": di * 100,
                 "cdi_data": data_busca,
-                "cdi_status": _freshness_status(data_busca, ref_date),
+                "cdi_status": _freshness_status(
+                    data_busca, ref_date, max_business_days=1
+                ),
             })
             break
 
@@ -413,13 +425,13 @@ def fetch_fiinfra_fundos_result(
         "cota_mercado_data": mercado.get(ticker, {}).get("data"),
         "cota_mercado_fonte": mercado.get(ticker, {}).get("fonte"),
         "cota_mercado_status": _freshness_status(
-            mercado.get(ticker, {}).get("data"), ref_date
+            mercado.get(ticker, {}).get("data"), ref_date, max_business_days=1
         ),
         "cota_patrimonial": patrimonial.get(ticker, {}).get("valor"),
         "cota_patrimonial_data": patrimonial.get(ticker, {}).get("data"),
         "cota_patrimonial_fonte": patrimonial.get(ticker, {}).get("fonte"),
         "cota_patrimonial_status": _freshness_status(
-            patrimonial.get(ticker, {}).get("data"), ref_date
+            patrimonial.get(ticker, {}).get("data"), ref_date, max_business_days=2
         ),
     } for ticker, cnpj in fundos.items()]
     return {"fundos": rows, "erros": erros, "data_solicitada": ref_date}
@@ -494,10 +506,34 @@ def _lookback_dates(ref_date: date, limit: int):
         current -= timedelta(days=1)
 
 
-def _freshness_status(data_value: Optional[date], ref_date: date) -> str:
+def _freshness_status(
+    data_value: Optional[date],
+    ref_date: date,
+    max_business_days: int = 0,
+) -> str:
     if data_value is None:
         return "INDISPONIVEL"
-    return "ATUALIZADO" if data_value == ref_date else "DEFASADO"
+    if data_value > ref_date:
+        return "DATA_FUTURA"
+    gap = _business_days_gap(data_value, ref_date)
+    if gap == 0:
+        return "ATUALIZADO"
+    if gap <= max_business_days:
+        return "DENTRO_SLA"
+    return "DEFASADO"
+
+
+def _business_days_gap(start: date, end: date) -> int:
+    """Conta dias de semana em (start, end], sem calendário de feriados."""
+    if start >= end:
+        return 0
+    current = start + timedelta(days=1)
+    total = 0
+    while current <= end:
+        if current.weekday() < 5:
+            total += 1
+        current += timedelta(days=1)
+    return total
 
 
 # ─────────────────────────────────────────────────────────────────

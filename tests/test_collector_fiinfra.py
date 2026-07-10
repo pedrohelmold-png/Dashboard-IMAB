@@ -77,11 +77,11 @@ class CollectorFiInfraTests(unittest.TestCase):
         }
         result = fetch_fiinfra_macro(date(2026, 7, 10), target_duration=8.0)
         self.assertEqual(result["ntnb_data"], date(2026, 7, 9))
-        self.assertEqual(result["ntnb_status"], "DEFASADO")
-        self.assertEqual(result["cdi_status"], "DEFASADO")
+        self.assertEqual(result["ntnb_status"], "DENTRO_SLA")
+        self.assertEqual(result["cdi_status"], "DENTRO_SLA")
         self.assertEqual(result["ntnb_vencimento"], date(2040, 8, 15))
         self.assertEqual(result["ipca_focus"], 4.1)
-        self.assertEqual(result["ipca_focus_status"], "DEFASADO")
+        self.assertEqual(result["ipca_focus_status"], "DENTRO_SLA")
 
     @patch("src.collector._download_zip")
     def test_b3_escolhe_ultimo_fechamento_ate_data(self, download):

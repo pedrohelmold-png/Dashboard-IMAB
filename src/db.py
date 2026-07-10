@@ -108,7 +108,20 @@ CREATE TABLE IF NOT EXISTS fiinfra_thresholds (
 
 CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     data                      TEXT PRIMARY KEY,
+    collection_id             TEXT,
+    data_solicitada           TEXT,
+    metodologia_version       TEXT,
+    cobertura_fundos          INTEGER,
+    juro_real_caro_ref        REAL,
+    juro_real_barato_ref      REAL,
+    spread_caro_ref           REAL,
+    spread_barato_ref         REAL,
+    excesso_caro_ref          REAL,
+    excesso_barato_ref        REAL,
     ntnb                      REAL,
+    ntnb_original             REAL,
+    ntnb_fonte                TEXT,
+    ntnb_override             INTEGER DEFAULT 0,
     spread                    REAL,
     excesso_mediano           REAL,
     duration_mediana          REAL,
@@ -121,9 +134,18 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     excesso_pos               REAL,
     mandato                   TEXT,
     cdi                       REAL,
+    cdi_original              REAL,
+    cdi_fonte                 TEXT,
+    cdi_override              INTEGER DEFAULT 0,
     aliquota                  REAL,
     inflacao_implicita        REAL,
+    inflacao_original         REAL,
+    inflacao_fonte            TEXT,
+    inflacao_override         INTEGER DEFAULT 0,
     ipca_focus                REAL,
+    ipca_focus_original       REAL,
+    ipca_focus_fonte          TEXT,
+    ipca_focus_override       INTEGER DEFAULT 0,
     ipca_focus_data           TEXT,
     ipca_focus_status         TEXT,
     inflacao_usada            REAL,
@@ -149,13 +171,28 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
 CREATE TABLE IF NOT EXISTS fiinfra_fundos_snapshot (
     data                 TEXT,
     ticker               TEXT,
+    cnpj                 TEXT,
     cota_mercado         REAL,
+    cota_mercado_original REAL,
+    cota_mercado_data    TEXT,
+    cota_mercado_fonte   TEXT,
+    cota_mercado_status  TEXT,
+    cota_mercado_override INTEGER DEFAULT 0,
     cota_patrimonial     REAL,
+    cota_patrimonial_original REAL,
+    cota_patrimonial_data TEXT,
+    cota_patrimonial_fonte TEXT,
+    cota_patrimonial_status TEXT,
+    cota_patrimonial_override INTEGER DEFAULT 0,
     taxa_total_aa        REAL,
+    taxa_total_status    TEXT,
     duration             REAL,
+    duration_status      TEXT,
     desconto_observado   REAL,
     desconto_justo       REAL,
     excesso_desconto     REAL,
+    elegivel             INTEGER DEFAULT 1,
+    motivo_exclusao      TEXT,
     PRIMARY KEY (data, ticker)
 );
 
@@ -227,6 +264,28 @@ def init_db_fiinfra(db_path=None) -> None:
             "ipca_focus": "REAL", "ipca_focus_data": "TEXT",
             "ipca_focus_status": "TEXT", "inflacao_usada": "REAL",
             "inflacao_usada_fonte": "TEXT",
+            "collection_id": "TEXT", "data_solicitada": "TEXT",
+            "ntnb_original": "REAL", "ntnb_fonte": "TEXT",
+            "ntnb_override": "INTEGER DEFAULT 0", "cdi_original": "REAL",
+            "cdi_fonte": "TEXT", "cdi_override": "INTEGER DEFAULT 0",
+            "inflacao_original": "REAL", "inflacao_fonte": "TEXT",
+            "inflacao_override": "INTEGER DEFAULT 0",
+            "ipca_focus_original": "REAL", "ipca_focus_fonte": "TEXT",
+            "ipca_focus_override": "INTEGER DEFAULT 0",
+            "metodologia_version": "TEXT", "cobertura_fundos": "INTEGER",
+            "juro_real_caro_ref": "REAL", "juro_real_barato_ref": "REAL",
+            "spread_caro_ref": "REAL", "spread_barato_ref": "REAL",
+            "excesso_caro_ref": "REAL", "excesso_barato_ref": "REAL",
+        })
+        _ensure_columns(conn, "fiinfra_fundos_snapshot", {
+            "cnpj": "TEXT", "cota_mercado_original": "REAL",
+            "cota_mercado_data": "TEXT", "cota_mercado_fonte": "TEXT",
+            "cota_mercado_status": "TEXT", "cota_mercado_override": "INTEGER DEFAULT 0",
+            "cota_patrimonial_original": "REAL", "cota_patrimonial_data": "TEXT",
+            "cota_patrimonial_fonte": "TEXT", "cota_patrimonial_status": "TEXT",
+            "cota_patrimonial_override": "INTEGER DEFAULT 0",
+            "taxa_total_status": "TEXT", "duration_status": "TEXT",
+            "elegivel": "INTEGER DEFAULT 1", "motivo_exclusao": "TEXT",
         })
         for chave, valor in DEFAULT_THRESHOLDS.items():
             conn.execute(
@@ -319,32 +378,56 @@ def upsert_fiinfra_snapshot(
         "cdi_data", "cdi_status", "inflacao_data", "inflacao_status", "coletado_em",
         "ipca_focus", "ipca_focus_data", "ipca_focus_status",
         "inflacao_usada", "inflacao_usada_fonte",
+        "collection_id", "data_solicitada", "ntnb_original", "ntnb_fonte",
+        "ntnb_override", "cdi_original", "cdi_fonte", "cdi_override",
+        "inflacao_original", "inflacao_fonte", "inflacao_override",
+        "ipca_focus_original", "ipca_focus_fonte", "ipca_focus_override",
+        "metodologia_version", "cobertura_fundos", "juro_real_caro_ref",
+        "juro_real_barato_ref", "spread_caro_ref", "spread_barato_ref",
+        "excesso_caro_ref", "excesso_barato_ref",
     ):
         row.setdefault(key, None)
     for key in (
         "ntnb_vencimento", "ntnb_data", "cdi_data", "inflacao_data", "coletado_em",
         "ipca_focus_data",
+        "data_solicitada",
     ):
         if row[key] is not None:
             row[key] = str(row[key])
+    for key in ("ntnb_override", "cdi_override", "inflacao_override", "ipca_focus_override"):
+        row[key] = int(bool(row[key]))
 
     with _conn(db_path) as conn:
         conn.execute("""
             INSERT OR REPLACE INTO fiinfra_snapshots
-              (data, ntnb, spread, excesso_mediano, duration_mediana, zona,
+              (data, collection_id, data_solicitada, metodologia_version,
+               cobertura_fundos, juro_real_caro_ref, juro_real_barato_ref,
+               spread_caro_ref, spread_barato_ref, excesso_caro_ref, excesso_barato_ref,
+               ntnb, ntnb_original, ntnb_fonte, ntnb_override,
+               spread, excesso_mediano, duration_mediana, zona,
                juro_estado, spread_estado, excesso_estado,
-               juro_pos, spread_pos, excesso_pos, mandato, cdi, aliquota,
-               inflacao_implicita, ipca_focus, ipca_focus_data, ipca_focus_status,
+               juro_pos, spread_pos, excesso_pos, mandato,
+               cdi, cdi_original, cdi_fonte, cdi_override, aliquota,
+               inflacao_implicita, inflacao_original, inflacao_fonte, inflacao_override,
+               ipca_focus, ipca_focus_original, ipca_focus_fonte, ipca_focus_override,
+               ipca_focus_data, ipca_focus_status,
                inflacao_usada, inflacao_usada_fonte,
                alternativa_liquida_real, yield_fundo_real,
                acao, destino, venda_bloqueada, observacao,
                ntnb_vencimento, ntnb_duration_ref, ntnb_data, ntnb_status,
                cdi_data, cdi_status, inflacao_data, inflacao_status, coletado_em)
             VALUES
-              (:data, :ntnb, :spread, :excesso_mediano, :duration_mediana, :zona,
+              (:data, :collection_id, :data_solicitada, :metodologia_version,
+               :cobertura_fundos, :juro_real_caro_ref, :juro_real_barato_ref,
+               :spread_caro_ref, :spread_barato_ref, :excesso_caro_ref, :excesso_barato_ref,
+               :ntnb, :ntnb_original, :ntnb_fonte, :ntnb_override,
+               :spread, :excesso_mediano, :duration_mediana, :zona,
                :juro_estado, :spread_estado, :excesso_estado,
-               :juro_pos, :spread_pos, :excesso_pos, :mandato, :cdi, :aliquota,
-               :inflacao_implicita, :ipca_focus, :ipca_focus_data, :ipca_focus_status,
+               :juro_pos, :spread_pos, :excesso_pos, :mandato,
+               :cdi, :cdi_original, :cdi_fonte, :cdi_override, :aliquota,
+               :inflacao_implicita, :inflacao_original, :inflacao_fonte, :inflacao_override,
+               :ipca_focus, :ipca_focus_original, :ipca_focus_fonte, :ipca_focus_override,
+               :ipca_focus_data, :ipca_focus_status,
                :inflacao_usada, :inflacao_usada_fonte,
                :alternativa_liquida_real, :yield_fundo_real,
                :acao, :destino, :venda_bloqueada, :observacao,
@@ -354,14 +437,42 @@ def upsert_fiinfra_snapshot(
 
         conn.execute("DELETE FROM fiinfra_fundos_snapshot WHERE data = ?", (row["data"],))
         for fundo in fundos:
+            fundo_row = {**fundo, "data": row["data"]}
+            for key in (
+                "cnpj", "cota_mercado_original", "cota_mercado_data",
+                "cota_mercado_fonte", "cota_mercado_status", "cota_mercado_override",
+                "cota_patrimonial_original", "cota_patrimonial_data",
+                "cota_patrimonial_fonte", "cota_patrimonial_status",
+                "cota_patrimonial_override", "taxa_total_status", "duration_status",
+                "elegivel", "motivo_exclusao",
+            ):
+                fundo_row.setdefault(key, None)
+            fundo_row["cota_mercado_override"] = int(bool(fundo_row["cota_mercado_override"]))
+            fundo_row["cota_patrimonial_override"] = int(bool(fundo_row["cota_patrimonial_override"]))
+            fundo_row["elegivel"] = int(fundo_row["elegivel"] is not False)
+            for key in ("cota_mercado_data", "cota_patrimonial_data"):
+                if fundo_row[key] is not None:
+                    fundo_row[key] = str(fundo_row[key])
             conn.execute("""
                 INSERT OR REPLACE INTO fiinfra_fundos_snapshot
-                  (data, ticker, cota_mercado, cota_patrimonial, taxa_total_aa,
-                   duration, desconto_observado, desconto_justo, excesso_desconto)
+                  (data, ticker, cnpj,
+                   cota_mercado, cota_mercado_original, cota_mercado_data,
+                   cota_mercado_fonte, cota_mercado_status, cota_mercado_override,
+                   cota_patrimonial, cota_patrimonial_original, cota_patrimonial_data,
+                   cota_patrimonial_fonte, cota_patrimonial_status, cota_patrimonial_override,
+                   taxa_total_aa, taxa_total_status, duration, duration_status,
+                   desconto_observado, desconto_justo, excesso_desconto,
+                   elegivel, motivo_exclusao)
                 VALUES
-                  (:data, :ticker, :cota_mercado, :cota_patrimonial, :taxa_total_aa,
-                   :duration, :desconto_observado, :desconto_justo, :excesso_desconto)
-            """, {**fundo, "data": row["data"]})
+                  (:data, :ticker, :cnpj,
+                   :cota_mercado, :cota_mercado_original, :cota_mercado_data,
+                   :cota_mercado_fonte, :cota_mercado_status, :cota_mercado_override,
+                   :cota_patrimonial, :cota_patrimonial_original, :cota_patrimonial_data,
+                   :cota_patrimonial_fonte, :cota_patrimonial_status, :cota_patrimonial_override,
+                   :taxa_total_aa, :taxa_total_status, :duration, :duration_status,
+                   :desconto_observado, :desconto_justo, :excesso_desconto,
+                   :elegivel, :motivo_exclusao)
+            """, fundo_row)
 
 
 def insert_fiinfra_tranche(tranche: dict, db_path=None) -> None:
@@ -469,6 +580,19 @@ def get_ultimo_fiinfra_snapshot(db_path=None) -> Optional[dict]:
     with _conn(db_path) as conn:
         cursor = conn.execute(
             "SELECT * FROM fiinfra_snapshots ORDER BY data DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cursor.description]
+        return dict(zip(cols, row))
+
+
+def get_fiinfra_snapshot(ref_date: date, db_path=None) -> Optional[dict]:
+    """Retorna o snapshot de uma data especifica, quando existir."""
+    with _conn(db_path) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM fiinfra_snapshots WHERE data = ?", (str(ref_date),)
         )
         row = cursor.fetchone()
         if not row:
