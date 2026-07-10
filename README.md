@@ -42,7 +42,10 @@ usada, aplica imposto sobre esse retorno nominal e deflaciona de volta.
 Cada atualizacao forma um lote vinculado a data solicitada. Mudar a data
 invalida o lote anterior, e o botao forca nova leitura das fontes mesmo com o
 servidor aberto ha varios dias. B3 e CVM sao tratadas independentemente para
-preservar resultados parciais. A recomendacao operacional exige ao menos tres
+preservar resultados parciais. A coleta tenta janelas anteriores quando a data
+solicitada cai em virada de mes/ano ou quando um arquivo ainda nao foi
+publicado: B3 pode recorrer ao COTAHIST do ano anterior, e CVM pode recorrer ao
+Informe Diario do mes anterior. A recomendacao operacional exige ao menos tres
 dos quatro fundos com dados completos.
 
 O snapshot da Regua FI-Infra guarda a proveniencia dos principais campos: lote

@@ -96,6 +96,23 @@ class CollectorFiInfraTests(unittest.TestCase):
         self.assertAlmostEqual(result["IFRA11"]["valor"], 93.31)
 
     @patch("src.collector._download_zip")
+    def test_b3_recua_para_ano_anterior_na_virada(self, download):
+        atual = _zip_bytes("COTAHIST_A2026.TXT", b"")
+        anterior = _zip_bytes(
+            "COTAHIST_A2025.TXT",
+            _cotahist_line(date(2025, 12, 30), "IFRA11", 91.42).encode("latin-1"),
+        )
+        download.side_effect = lambda url, force_refresh=False: (
+            atual if "A2026" in url else anterior
+        )
+
+        result = fetch_cotacoes_b3(date(2026, 1, 5), ["IFRA11"])
+
+        self.assertEqual(result["IFRA11"]["data"], date(2025, 12, 30))
+        self.assertAlmostEqual(result["IFRA11"]["valor"], 91.42)
+        self.assertEqual(download.call_count, 2)
+
+    @patch("src.collector._download_zip")
     def test_cvm_aceita_decimal_com_ponto_e_virgula(self, download):
         cnpj = FIINFRA_FUNDOS["IFRA11"]
         csv = (
@@ -107,6 +124,51 @@ class CollectorFiInfraTests(unittest.TestCase):
         result = fetch_cotas_cvm(date(2026, 7, 10), {"IFRA11": cnpj})
         self.assertEqual(result["IFRA11"]["data"], date(2026, 7, 9))
         self.assertAlmostEqual(result["IFRA11"]["valor"], 95.25)
+
+    @patch("src.collector._download_zip")
+    def test_cvm_recua_para_mes_anterior_na_virada(self, download):
+        cnpj = FIINFRA_FUNDOS["IFRA11"]
+        agosto = _zip_bytes(
+            "inf_diario_fi_202608.csv",
+            "CNPJ_FUNDO_CLASSE;DT_COMPTC;VL_QUOTA\n".encode("latin-1"),
+        )
+        julho = _zip_bytes(
+            "inf_diario_fi_202607.csv",
+            (
+                "CNPJ_FUNDO_CLASSE;DT_COMPTC;VL_QUOTA\n"
+                f"{cnpj};2026-07-31;96,10\n"
+            ).encode("latin-1"),
+        )
+        download.side_effect = lambda url, force_refresh=False: (
+            agosto if "202608" in url else julho
+        )
+
+        result = fetch_cotas_cvm(date(2026, 8, 3), {"IFRA11": cnpj})
+
+        self.assertEqual(result["IFRA11"]["data"], date(2026, 7, 31))
+        self.assertAlmostEqual(result["IFRA11"]["valor"], 96.10)
+        self.assertEqual(result["IFRA11"]["fonte"], "CVM Informe Diario 2026-07")
+
+    @patch("src.collector._download_zip")
+    def test_cvm_falha_mes_atual_preserva_mes_anterior(self, download):
+        cnpj = FIINFRA_FUNDOS["IFRA11"]
+        julho = _zip_bytes(
+            "inf_diario_fi_202607.csv",
+            (
+                "CNPJ_FUNDO_CLASSE;DT_COMPTC;VL_QUOTA\n"
+                f"{cnpj};2026-07-31;96,10\n"
+            ).encode("latin-1"),
+        )
+
+        def responder(url, force_refresh=False):
+            if "202608" in url:
+                raise RuntimeError("arquivo ainda nao publicado")
+            return julho
+
+        download.side_effect = responder
+        result = fetch_cotas_cvm(date(2026, 8, 3), {"IFRA11": cnpj})
+
+        self.assertEqual(result["IFRA11"]["data"], date(2026, 7, 31))
 
     @patch("src.collector.urllib.request.urlopen")
     def test_cache_tem_refresh_forcado(self, urlopen):

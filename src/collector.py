@@ -311,36 +311,22 @@ def fetch_cotacoes_b3(
 ) -> dict:
     """Retorna o ultimo fechamento B3 ate ``ref_date`` para cada ticker."""
     tickers = {str(t).upper() for t in (tickers or FIINFRA_FUNDOS)}
-    raw = _download_zip(
-        url or B3_COTAHIST_URL.format(year=ref_date.year),
-        force_refresh=force_refresh,
-    )
     encontrados = {}
-    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        member = next(n for n in archive.namelist() if n.upper().endswith(".TXT"))
-        with archive.open(member) as stream:
-            for raw_line in stream:
-                line = raw_line.decode("latin-1")
-                if line[:2] != "01":
-                    continue
-                ticker = line[12:24].strip().upper()
-                if ticker not in tickers:
-                    continue
-                try:
-                    data_pregao = date.fromisoformat(
-                        f"{line[2:6]}-{line[6:8]}-{line[8:10]}"
-                    )
-                    preco = int(line[108:121]) / 100
-                except (ValueError, IndexError):
-                    continue
-                if data_pregao <= ref_date and (
-                    ticker not in encontrados or data_pregao > encontrados[ticker]["data"]
-                ):
-                    encontrados[ticker] = {
-                        "valor": preco,
-                        "data": data_pregao,
-                        "fonte": "B3 COTAHIST",
-                    }
+    urls = [url] if url else [
+        B3_COTAHIST_URL.format(year=year)
+        for year in _candidate_years(ref_date, lookback_business_days=10)
+    ]
+    erros = []
+    for candidate_url in urls:
+        try:
+            raw = _download_zip(candidate_url, force_refresh=force_refresh)
+            _merge_b3_cotahist(encontrados, raw, tickers, ref_date)
+        except Exception as exc:
+            erros.append(f"{candidate_url}: {exc}")
+            if url:
+                raise
+    if not encontrados and erros:
+        raise RuntimeError("Falha ao baixar COTAHIST B3: " + " | ".join(erros))
     return encontrados
 
 
@@ -352,16 +338,22 @@ def fetch_cotas_cvm(
 ) -> dict:
     """Retorna a ultima cota patrimonial CVM ate a data por ticker."""
     fundos = fundos or FIINFRA_FUNDOS
-    raw = _download_zip(
-        url or CVM_INF_DIARIO_URL.format(year=ref_date.year, month=ref_date.month),
-        force_refresh=force_refresh,
-    )
     frames = []
-    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        for member in archive.namelist():
-            if member.lower().endswith(".csv"):
-                with archive.open(member) as stream:
-                    frames.append(pd.read_csv(stream, sep=";", encoding="latin-1", dtype=str))
+    urls = [url] if url else [
+        CVM_INF_DIARIO_URL.format(year=year, month=month)
+        for year, month in _candidate_months(ref_date, lookback_business_days=10)
+    ]
+    erros = []
+    for candidate_url in urls:
+        try:
+            raw = _download_zip(candidate_url, force_refresh=force_refresh)
+            frames.extend(_read_cvm_frames(raw))
+        except Exception as exc:
+            erros.append(f"{candidate_url}: {exc}")
+            if url:
+                raise
+    if not frames and erros:
+        raise RuntimeError("Falha ao baixar Informe Diario CVM: " + " | ".join(erros))
     if not frames:
         return {}
     df = pd.concat(frames, ignore_index=True)
@@ -382,7 +374,7 @@ def fetch_cotas_cvm(
             resultado[ticker] = {
                 "valor": float(row["_cota"]),
                 "data": row["_data"],
-                "fonte": "CVM Informe Diario",
+                "fonte": f"CVM Informe Diario {row['_data']:%Y-%m}",
             }
     return resultado
 
@@ -392,6 +384,74 @@ def fetch_fiinfra_fundos(ref_date: date, fundos=None, force_refresh: bool = Fals
     return fetch_fiinfra_fundos_result(
         ref_date, fundos=fundos, force_refresh=force_refresh
     )["fundos"]
+
+
+def _merge_b3_cotahist(
+    encontrados: dict,
+    raw: bytes,
+    tickers: set[str],
+    ref_date: date,
+) -> None:
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        members = [n for n in archive.namelist() if n.upper().endswith(".TXT")]
+        for member in members:
+            with archive.open(member) as stream:
+                for raw_line in stream:
+                    line = raw_line.decode("latin-1")
+                    if line[:2] != "01":
+                        continue
+                    ticker = line[12:24].strip().upper()
+                    if ticker not in tickers:
+                        continue
+                    try:
+                        data_pregao = date.fromisoformat(
+                            f"{line[2:6]}-{line[6:8]}-{line[8:10]}"
+                        )
+                        preco = int(line[108:121]) / 100
+                    except (ValueError, IndexError):
+                        continue
+                    if data_pregao <= ref_date and (
+                        ticker not in encontrados
+                        or data_pregao > encontrados[ticker]["data"]
+                    ):
+                        encontrados[ticker] = {
+                            "valor": preco,
+                            "data": data_pregao,
+                            "fonte": f"B3 COTAHIST {data_pregao.year}",
+                        }
+
+
+def _read_cvm_frames(raw: bytes) -> list[pd.DataFrame]:
+    frames = []
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for member in archive.namelist():
+            if member.lower().endswith(".csv"):
+                with archive.open(member) as stream:
+                    frames.append(pd.read_csv(stream, sep=";", encoding="latin-1", dtype=str))
+    return frames
+
+
+def _candidate_years(ref_date: date, lookback_business_days: int) -> list[int]:
+    return _unique_preserve_order(
+        day.year for day in _lookback_dates(ref_date, lookback_business_days)
+    )
+
+
+def _candidate_months(ref_date: date, lookback_business_days: int) -> list[tuple[int, int]]:
+    return _unique_preserve_order(
+        (day.year, day.month)
+        for day in _lookback_dates(ref_date, lookback_business_days)
+    )
+
+
+def _unique_preserve_order(values) -> list:
+    result = []
+    seen = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def fetch_fiinfra_fundos_result(
