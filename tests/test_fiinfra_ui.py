@@ -12,6 +12,7 @@ from src.fiinfra_ui import (
     _apply_premissas_lote,
     _confirmar_estimativas_fundos,
     _historical_threshold,
+    _json_list_summary,
     _macro_quality_rows,
     _quality_summary,
     _snapshot_payload,
@@ -215,6 +216,11 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(ntnb["status"], "OVERRIDE_MANUAL")
         self.assertTrue(ntnb["override"])
         self.assertEqual(spread["status"], "MANUAL_SEM_FONTE_OFICIAL")
+
+    def test_json_list_summary_formata_alertas_de_auditoria(self):
+        self.assertEqual(_json_list_summary('["B3 parcial", "spread manual"]'), "B3 parcial | spread manual")
+        self.assertEqual(_json_list_summary(None), "")
+        self.assertEqual(_json_list_summary("texto legado"), "texto legado")
 
     def test_premissas_lote_atualiza_taxa_duration_e_status(self):
         base = pd.DataFrame([

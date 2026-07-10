@@ -777,6 +777,29 @@ def _status_counts(auto_macro: dict, fundos_calc: list[dict]) -> dict:
     return {status: statuses.count(status) for status in set(statuses)}
 
 
+def _json_list_summary(value) -> str:
+    items = _safe_json_list(value)
+    if not items:
+        return ""
+    return " | ".join(str(item) for item in items)
+
+
+def _safe_json_list(value) -> list:
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return [value]
+    if isinstance(parsed, list):
+        return parsed
+    if parsed in (None, ""):
+        return []
+    return [parsed]
+
+
 def _render_history(thresholds: dict) -> None:
     st.subheader("Historico e recalibracao")
     periodos = {
@@ -836,8 +859,13 @@ def _render_history(thresholds: dict) -> None:
     history_columns = [
         "data", "ntnb", "spread", "excesso_mediano", "ipca_focus",
         "inflacao_implicita", "inflacao_usada_fonte", "zona", "acao", "destino",
-        "metodologia_version",
+        "metodologia_version", "alertas_qualidade", "erros_coleta",
     ]
+    hist = hist.copy()
+    if "quality_issues" in hist.columns:
+        hist["alertas_qualidade"] = hist["quality_issues"].apply(_json_list_summary)
+    if "collection_errors" in hist.columns:
+        hist["erros_coleta"] = hist["collection_errors"].apply(_json_list_summary)
     tabela = hist[[col for col in history_columns if col in hist.columns]].copy()
     st.dataframe(tabela, hide_index=True, width="stretch")
 
@@ -852,6 +880,12 @@ def _render_revisions(ref_date: date) -> None:
             "revisao_num", "substituido_em", "zona", "metodologia_version",
             "fundos_count", "observacao",
         ]].copy()
+        display["alertas_qualidade"] = revisions["snapshot_json"].apply(
+            lambda value: _json_list_summary(json.loads(value).get("quality_issues"))
+        )
+        display["erros_coleta"] = revisions["snapshot_json"].apply(
+            lambda value: _json_list_summary(json.loads(value).get("collection_errors"))
+        )
         st.dataframe(
             display,
             hide_index=True,
@@ -863,6 +897,8 @@ def _render_revisions(ref_date: date) -> None:
                 "metodologia_version": st.column_config.TextColumn("Metodologia"),
                 "fundos_count": st.column_config.NumberColumn("Fundos", format="%d"),
                 "observacao": st.column_config.TextColumn("Observacao"),
+                "alertas_qualidade": st.column_config.TextColumn("Alertas"),
+                "erros_coleta": st.column_config.TextColumn("Erros coleta"),
             },
         )
         options = {
