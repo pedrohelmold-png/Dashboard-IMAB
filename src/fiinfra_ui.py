@@ -524,8 +524,16 @@ def _render_history(thresholds: dict) -> None:
         vertical_spacing=0.05,
         subplot_titles=("Juro real", "Spread", "Excesso de desconto"),
     )
-    _add_signal_trace(fig, hist, 1, "ntnb", "Juro real", thresholds["juro_real_caro"], thresholds["juro_real_barato"], "%")
-    _add_signal_trace(fig, hist, 2, "spread", "Spread", thresholds["spread_caro"], thresholds["spread_barato"], " bps")
+    _add_signal_trace(
+        fig, hist, 1, "ntnb", "Juro real",
+        thresholds["juro_real_caro"], thresholds["juro_real_barato"], "%",
+        caro_ref_col="juro_real_caro_ref", barato_ref_col="juro_real_barato_ref",
+    )
+    _add_signal_trace(
+        fig, hist, 2, "spread", "Spread",
+        thresholds["spread_caro"], thresholds["spread_barato"], " bps",
+        caro_ref_col="spread_caro_ref", barato_ref_col="spread_barato_ref",
+    )
     _add_signal_trace(
         fig,
         hist,
@@ -535,6 +543,8 @@ def _render_history(thresholds: dict) -> None:
         thresholds["excesso_caro"],
         thresholds["excesso_barato"],
         " p.p.",
+        caro_ref_col="excesso_caro_ref",
+        barato_ref_col="excesso_barato_ref",
     )
     fig.update_layout(
         height=620,
@@ -551,6 +561,7 @@ def _render_history(thresholds: dict) -> None:
     history_columns = [
         "data", "ntnb", "spread", "excesso_mediano", "ipca_focus",
         "inflacao_implicita", "inflacao_usada_fonte", "zona", "acao", "destino",
+        "metodologia_version",
     ]
     tabela = hist[[col for col in history_columns if col in hist.columns]].copy()
     st.dataframe(tabela, hide_index=True, width="stretch")
@@ -629,6 +640,8 @@ def _add_signal_trace(
     caro: float,
     barato: float,
     suffix: str,
+    caro_ref_col: Optional[str] = None,
+    barato_ref_col: Optional[str] = None,
 ) -> None:
     fig.add_trace(
         go.Scatter(
@@ -642,8 +655,44 @@ def _add_signal_trace(
         row=row,
         col=1,
     )
-    fig.add_hline(y=barato, line_color="#16a34a", line_dash="dot", row=row, col=1)
-    fig.add_hline(y=caro, line_color="#dc2626", line_dash="dot", row=row, col=1)
+    barato_series = _historical_threshold(hist, barato_ref_col, barato)
+    caro_series = _historical_threshold(hist, caro_ref_col, caro)
+    fig.add_trace(
+        go.Scatter(
+            x=hist["data"],
+            y=barato_series,
+            mode="lines",
+            name=f"{name} barato ref",
+            line=dict(color="#16a34a", width=1.5, dash="dot"),
+            hovertemplate=f"%{{y:.2f}}{suffix}<extra>{name} barato ref</extra>",
+        ),
+        row=row,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=hist["data"],
+            y=caro_series,
+            mode="lines",
+            name=f"{name} caro ref",
+            line=dict(color="#dc2626", width=1.5, dash="dot"),
+            hovertemplate=f"%{{y:.2f}}{suffix}<extra>{name} caro ref</extra>",
+        ),
+        row=row,
+        col=1,
+    )
+
+
+def _historical_threshold(
+    hist: pd.DataFrame,
+    ref_col: Optional[str],
+    fallback: float,
+) -> pd.Series:
+    if ref_col and ref_col in hist.columns:
+        series = pd.to_numeric(hist[ref_col], errors="coerce").fillna(float(fallback))
+    else:
+        series = pd.Series(float(fallback), index=hist.index)
+    return series
 
 
 def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:

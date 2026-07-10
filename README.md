@@ -51,7 +51,9 @@ SLA e indicacao de override manual. Os limiares usados na classificacao tambem
 ficam congelados no snapshot para auditoria historica. Quando um snapshot da
 mesma data e salvo novamente, a versao anterior e arquivada como revisao com
 seu JSON completo e os fundos daquela foto; a tela mostra as revisoes
-arquivadas da data selecionada.
+arquivadas da data selecionada. No grafico historico, as linhas de limiar usam
+os valores congelados em cada snapshot; snapshots antigos sem esses campos usam
+os limiares atuais como fallback.
 
 Nos fundos, a regua preserva CNPJ, fonte, data-base, status e valor original
 das cotas de mercado e patrimonial. Um fundo deixa de entrar na mediana quando

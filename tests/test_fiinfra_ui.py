@@ -2,9 +2,16 @@ from datetime import date, timedelta
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+from plotly.subplots import make_subplots
 from streamlit.testing.v1 import AppTest
 
-from src.fiinfra_ui import _confirmar_estimativas_fundos, _snapshot_payload
+from src.fiinfra_ui import (
+    _add_signal_trace,
+    _confirmar_estimativas_fundos,
+    _historical_threshold,
+    _snapshot_payload,
+)
 from src.regua_fiinfra import avaliar_sinais
 
 
@@ -133,6 +140,39 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(confirmados[0]["taxa_total_status"], "MANUAL_CONFIRMADO")
         self.assertEqual(confirmados[0]["duration_status"], "MANUAL_CONFIRMADO")
         self.assertEqual(fundos[0]["taxa_total_status"], "ESTIMATIVA_NAO_CONFIRMADA")
+
+    def test_historico_usa_limiares_congelados_com_fallback(self):
+        hist = pd.DataFrame({
+            "data": [date(2026, 7, 3), date(2026, 7, 10)],
+            "ntnb": [6.0, 7.0],
+            "juro_real_caro_ref": [5.0, None],
+            "juro_real_barato_ref": [6.5, 7.0],
+        })
+
+        barato = _historical_threshold(hist, "juro_real_barato_ref", 6.6)
+        caro = _historical_threshold(hist, "juro_real_caro_ref", 5.2)
+
+        self.assertEqual(barato.tolist(), [6.5, 7.0])
+        self.assertEqual(caro.tolist(), [5.0, 5.2])
+
+    def test_trace_historico_desenha_limiares_como_series(self):
+        hist = pd.DataFrame({
+            "data": [date(2026, 7, 3), date(2026, 7, 10)],
+            "ntnb": [6.0, 7.0],
+            "juro_real_caro_ref": [5.0, 5.2],
+            "juro_real_barato_ref": [6.5, 6.8],
+        })
+        fig = make_subplots(rows=1, cols=1)
+
+        _add_signal_trace(
+            fig, hist, 1, "ntnb", "Juro real", 4.5, 6.0, "%",
+            caro_ref_col="juro_real_caro_ref",
+            barato_ref_col="juro_real_barato_ref",
+        )
+
+        self.assertEqual(len(fig.data), 3)
+        self.assertEqual(list(fig.data[1].y), [6.5, 6.8])
+        self.assertEqual(list(fig.data[2].y), [5.0, 5.2])
 
 
 if __name__ == "__main__":
