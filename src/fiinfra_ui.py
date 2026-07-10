@@ -268,9 +268,26 @@ def render_regua_fiinfra() -> None:
     )
     fundos_df = pd.DataFrame(fundos_calc)
     cobertura = sum(bool(row.get("elegivel")) for row in fundos_calc)
+    macro_values = {
+        "ntnb": ntnb,
+        "cdi": cdi,
+        "inflacao_implicita": inflacao_implicita,
+        "ipca_focus": ipca_focus,
+    }
+    existente = get_fiinfra_snapshot(ref_date)
+    revisions = load_fiinfra_revisions(ref_date)
+    qualidade = _quality_summary(
+        auto_macro=auto_macro,
+        fundos_calc=fundos_calc,
+        collection=collection,
+        macro_values=macro_values,
+        existing_snapshot=existente,
+        next_revision=len(revisions) + 1,
+    )
     st.caption(f"Cobertura do sinal de desconto: {cobertura}/{len(fundos_calc)} fundos válidos.")
 
     if cobertura < 3:
+        _render_quality_panel(auto_macro, macro_values, fundos_calc, collection, cobertura, qualidade)
         st.warning(
             "Cobertura insuficiente para uma recomendacao operacional. "
             "Sao necessarios pelo menos 3 fundos com dados completos."
@@ -300,42 +317,10 @@ def render_regua_fiinfra() -> None:
         avaliacao,
     )
     _render_fundos_calculados(fundos_df)
+    _render_quality_panel(auto_macro, macro_values, fundos_calc, collection, cobertura, qualidade)
 
     observacao = st.text_area("Observacao do snapshot", height=80)
-    macro_overrides = sum(
-        _field_provenance(auto_macro, key, value)["override"]
-        for key, value in (
-            ("ntnb", ntnb), ("cdi", cdi),
-            ("inflacao_implicita", inflacao_implicita), ("ipca_focus", ipca_focus),
-        )
-    )
-    fund_overrides = sum(
-        int(bool(row.get("cota_mercado_override")))
-        + int(bool(row.get("cota_patrimonial_override")))
-        for row in fundos_calc
-    )
-    estimativas = sum(
-        row.get("taxa_total_status") == "ESTIMATIVA_NAO_CONFIRMADA"
-        or row.get("duration_status") == "ESTIMATIVA_NAO_CONFIRMADA"
-        for row in fundos_calc
-    )
-    quality_issues = []
-    if not collection:
-        quality_issues.append("snapshot sem lote de coleta oficial para a data")
-    quality_issues.extend(collection.get("erros", []))
-    if macro_overrides or fund_overrides:
-        quality_issues.append(
-            f"{macro_overrides + fund_overrides} campo(s) com override manual"
-        )
-    if estimativas:
-        quality_issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
-    existente = get_fiinfra_snapshot(ref_date)
-    revisions = load_fiinfra_revisions(ref_date)
-    if existente:
-        quality_issues.append(
-            f"ja existe snapshot nesta data; a versao atual sera arquivada "
-            f"como revisao {len(revisions) + 1}"
-        )
+    quality_issues = qualidade["issues"]
 
     confirmar = True
     if quality_issues:
@@ -500,6 +485,164 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
             "cota_patrimonial_override": st.column_config.CheckboxColumn("Override patrimonial"),
         },
     )
+
+
+def _render_quality_panel(
+    auto_macro: dict,
+    macro_values: dict,
+    fundos_calc: list[dict],
+    collection: dict,
+    cobertura: int,
+    qualidade: dict,
+) -> None:
+    with st.expander("Qualidade dos dados", expanded=bool(qualidade["issues"])):
+        cols = st.columns(4)
+        lote = collection.get("collection_id", "manual")
+        cols[0].metric("Lote", str(lote)[:8])
+        cols[1].metric("Cobertura", f"{cobertura}/{len(fundos_calc)}")
+        cols[2].metric("Overrides", qualidade["total_overrides"])
+        cols[3].metric("Estimativas", qualidade["estimativas"])
+
+        status = qualidade["status_counts"]
+        st.caption(
+            "Status: "
+            f"{status.get('ATUALIZADO', 0)} na data, "
+            f"{status.get('DENTRO_SLA', 0)} dentro do SLA, "
+            f"{status.get('DEFASADO', 0)} defasados, "
+            f"{status.get('INDISPONIVEL', 0)} indisponiveis."
+        )
+
+        macro_df = pd.DataFrame(_macro_quality_rows(auto_macro, macro_values))
+        st.dataframe(
+            macro_df,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "valor": st.column_config.NumberColumn("Valor", format="%.2f"),
+                "original": st.column_config.NumberColumn("Original", format="%.2f"),
+                "override": st.column_config.CheckboxColumn("Override"),
+            },
+        )
+
+        fundos_df = pd.DataFrame(_fund_quality_rows(fundos_calc))
+        if not fundos_df.empty:
+            st.dataframe(
+                fundos_df,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "elegivel": st.column_config.CheckboxColumn("Elegivel"),
+                    "override": st.column_config.CheckboxColumn("Override"),
+                },
+            )
+
+        if qualidade["issues"]:
+            st.caption("Pontos para revisar: " + " | ".join(qualidade["issues"]))
+
+
+def _quality_summary(
+    auto_macro: dict,
+    fundos_calc: list[dict],
+    collection: dict,
+    macro_values: dict,
+    existing_snapshot: Optional[dict],
+    next_revision: int,
+) -> dict:
+    macro_rows = _macro_quality_rows(auto_macro, macro_values)
+    macro_overrides = sum(int(bool(row["override"])) for row in macro_rows)
+    fund_overrides = sum(
+        int(bool(row.get("cota_mercado_override")))
+        + int(bool(row.get("cota_patrimonial_override")))
+        for row in fundos_calc
+    )
+    estimativas = sum(
+        row.get("taxa_total_status") == "ESTIMATIVA_NAO_CONFIRMADA"
+        or row.get("duration_status") == "ESTIMATIVA_NAO_CONFIRMADA"
+        for row in fundos_calc
+    )
+    issues = []
+    if not collection:
+        issues.append("snapshot sem lote de coleta oficial para a data")
+    issues.extend(collection.get("erros", []))
+    total_overrides = macro_overrides + fund_overrides
+    if total_overrides:
+        issues.append(f"{total_overrides} campo(s) com override manual")
+    if estimativas:
+        issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
+    if existing_snapshot:
+        issues.append(
+            f"ja existe snapshot nesta data; a versao atual sera arquivada "
+            f"como revisao {next_revision}"
+        )
+
+    return {
+        "issues": issues,
+        "macro_overrides": macro_overrides,
+        "fund_overrides": fund_overrides,
+        "total_overrides": total_overrides,
+        "estimativas": estimativas,
+        "status_counts": _status_counts(auto_macro, fundos_calc),
+    }
+
+
+def _macro_quality_rows(auto_macro: dict, macro_values: dict) -> list[dict]:
+    labels = {
+        "ntnb": "NTN-B longa",
+        "cdi": "CDI",
+        "inflacao_implicita": "Inflacao implicita",
+        "ipca_focus": "IPCA Focus 12m",
+    }
+    date_keys = {
+        "ntnb": "ntnb_data",
+        "cdi": "cdi_data",
+        "inflacao_implicita": "inflacao_data",
+        "ipca_focus": "ipca_focus_data",
+    }
+    rows = []
+    for key, label in labels.items():
+        meta = _field_provenance(auto_macro, key, macro_values.get(key))
+        rows.append({
+            "campo": label,
+            "valor": macro_values.get(key),
+            "original": meta["original"],
+            "fonte": meta["fonte"],
+            "data_base": auto_macro.get(date_keys[key]),
+            "status": meta["status"],
+            "override": meta["override"],
+        })
+    return rows
+
+
+def _fund_quality_rows(fundos_calc: list[dict]) -> list[dict]:
+    rows = []
+    for row in fundos_calc:
+        rows.append({
+            "ticker": row.get("ticker"),
+            "mercado": row.get("cota_mercado_status"),
+            "patrimonial": row.get("cota_patrimonial_status"),
+            "taxa": row.get("taxa_total_status"),
+            "duration": row.get("duration_status"),
+            "elegivel": bool(row.get("elegivel")),
+            "override": bool(row.get("cota_mercado_override"))
+            or bool(row.get("cota_patrimonial_override")),
+            "motivo": row.get("motivo_exclusao"),
+        })
+    return rows
+
+
+def _status_counts(auto_macro: dict, fundos_calc: list[dict]) -> dict:
+    statuses = [
+        auto_macro.get("ntnb_status", "INDISPONIVEL"),
+        auto_macro.get("cdi_status", "INDISPONIVEL"),
+        auto_macro.get("inflacao_status", "INDISPONIVEL"),
+        auto_macro.get("ipca_focus_status", "INDISPONIVEL"),
+    ]
+    for fundo in fundos_calc:
+        statuses.extend([
+            fundo.get("cota_mercado_status", "INDISPONIVEL"),
+            fundo.get("cota_patrimonial_status", "INDISPONIVEL"),
+        ])
+    return {status: statuses.count(status) for status in set(statuses)}
 
 
 def _render_history(thresholds: dict) -> None:
@@ -896,7 +1039,12 @@ def _prior_or_default(row: dict, key: str, fallback: float) -> float:
 def _field_provenance(auto: dict, key: str, effective: float) -> dict:
     original = auto.get(key)
     override = False
-    if original is not None and not pd.isna(original):
+    if (
+        original is not None
+        and not pd.isna(original)
+        and effective is not None
+        and not pd.isna(effective)
+    ):
         override = not math.isclose(
             float(effective), float(original), rel_tol=1e-9, abs_tol=1e-9
         )

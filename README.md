@@ -60,6 +60,10 @@ das cotas de mercado e patrimonial. Um fundo deixa de entrar na mediana quando
 tem dados incompletos ou quando B3 e CVM estao desalinhadas por mais de um dia
 util. Alteracoes manuais nas cotas sao marcadas como override.
 
+O painel **Qualidade dos dados** consolida lote de coleta, cobertura, status
+das fontes, overrides, estimativas e pontos que exigem revisao antes do
+salvamento. Ele usa as mesmas regras que habilitam a confirmacao do snapshot.
+
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e

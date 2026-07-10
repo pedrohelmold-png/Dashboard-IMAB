@@ -10,6 +10,8 @@ from src.fiinfra_ui import (
     _add_signal_trace,
     _confirmar_estimativas_fundos,
     _historical_threshold,
+    _macro_quality_rows,
+    _quality_summary,
     _snapshot_payload,
 )
 from src.regua_fiinfra import avaliar_sinais
@@ -140,6 +142,63 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertEqual(confirmados[0]["taxa_total_status"], "MANUAL_CONFIRMADO")
         self.assertEqual(confirmados[0]["duration_status"], "MANUAL_CONFIRMADO")
         self.assertEqual(fundos[0]["taxa_total_status"], "ESTIMATIVA_NAO_CONFIRMADA")
+
+    def test_quality_summary_agrega_status_overrides_e_revisao(self):
+        auto_macro = {
+            "ntnb": 7.0,
+            "ntnb_status": "ATUALIZADO",
+            "ntnb_fonte": "ANBIMA",
+            "cdi": 14.0,
+            "cdi_status": "DENTRO_SLA",
+            "inflacao_implicita": 6.0,
+            "inflacao_status": "DEFASADO",
+            "ipca_focus": 4.5,
+            "ipca_focus_status": "ATUALIZADO",
+        }
+        fundos = [{
+            "ticker": "IFRA11",
+            "cota_mercado_status": "ATUALIZADO",
+            "cota_patrimonial_status": "DENTRO_SLA",
+            "cota_mercado_override": True,
+            "cota_patrimonial_override": False,
+            "taxa_total_status": "ESTIMATIVA_NAO_CONFIRMADA",
+            "duration_status": "HISTORICO",
+            "elegivel": True,
+        }]
+
+        resumo = _quality_summary(
+            auto_macro=auto_macro,
+            fundos_calc=fundos,
+            collection={"erros": ["B3 parcial"]},
+            macro_values={
+                "ntnb": 7.1,
+                "cdi": 14.0,
+                "inflacao_implicita": 6.0,
+                "ipca_focus": 4.5,
+            },
+            existing_snapshot={"data": "2026-07-10"},
+            next_revision=2,
+        )
+
+        self.assertEqual(resumo["macro_overrides"], 1)
+        self.assertEqual(resumo["fund_overrides"], 1)
+        self.assertEqual(resumo["total_overrides"], 2)
+        self.assertEqual(resumo["estimativas"], 1)
+        self.assertEqual(resumo["status_counts"]["ATUALIZADO"], 3)
+        self.assertIn("B3 parcial", resumo["issues"])
+        self.assertTrue(any("revisao 2" in issue for issue in resumo["issues"]))
+
+    def test_macro_quality_rows_preserva_fonte_status_e_original(self):
+        rows = _macro_quality_rows(
+            {"ntnb": 7.0, "ntnb_fonte": "ANBIMA", "ntnb_status": "ATUALIZADO"},
+            {"ntnb": 7.1, "cdi": 14.0, "inflacao_implicita": 6.0, "ipca_focus": 4.5},
+        )
+
+        self.assertEqual(rows[0]["campo"], "NTN-B longa")
+        self.assertEqual(rows[0]["original"], 7.0)
+        self.assertEqual(rows[0]["fonte"], "ANBIMA")
+        self.assertEqual(rows[0]["status"], "OVERRIDE_MANUAL")
+        self.assertTrue(rows[0]["override"])
 
     def test_historico_usa_limiares_congelados_com_fallback(self):
         hist = pd.DataFrame({
