@@ -17,6 +17,7 @@ from src.db import (
     get_ultimo_fiinfra_snapshot,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    load_fiinfra_revisions,
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
     load_fiinfra_tranches,
@@ -275,6 +276,7 @@ def render_regua_fiinfra() -> None:
             "Sao necessarios pelo menos 3 fundos com dados completos."
         )
         _render_history(thresholds)
+        _render_revisions(ref_date)
         _render_tranches()
         return
 
@@ -328,8 +330,12 @@ def render_regua_fiinfra() -> None:
     if estimativas:
         quality_issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
     existente = get_fiinfra_snapshot(ref_date)
+    revisions = load_fiinfra_revisions(ref_date)
     if existente:
-        quality_issues.append("ja existe snapshot nesta data; o registro sera substituido")
+        quality_issues.append(
+            f"ja existe snapshot nesta data; a versao atual sera arquivada "
+            f"como revisao {len(revisions) + 1}"
+        )
 
     confirmar = True
     if quality_issues:
@@ -370,6 +376,7 @@ def render_regua_fiinfra() -> None:
         st.rerun()
 
     _render_history(thresholds)
+    _render_revisions(ref_date)
     _render_tranches()
 
 
@@ -547,6 +554,31 @@ def _render_history(thresholds: dict) -> None:
     ]
     tabela = hist[[col for col in history_columns if col in hist.columns]].copy()
     st.dataframe(tabela, hide_index=True, width="stretch")
+
+
+def _render_revisions(ref_date: date) -> None:
+    revisions = load_fiinfra_revisions(ref_date)
+    if revisions.empty:
+        return
+
+    with st.expander(f"Revisoes arquivadas de {ref_date.isoformat()}"):
+        display = revisions[[
+            "revisao_num", "substituido_em", "zona", "metodologia_version",
+            "fundos_count", "observacao",
+        ]].copy()
+        st.dataframe(
+            display,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "revisao_num": st.column_config.NumberColumn("Revisao", format="%d"),
+                "substituido_em": st.column_config.TextColumn("Arquivada em"),
+                "zona": st.column_config.TextColumn("Zona"),
+                "metodologia_version": st.column_config.TextColumn("Metodologia"),
+                "fundos_count": st.column_config.NumberColumn("Fundos", format="%d"),
+                "observacao": st.column_config.TextColumn("Observacao"),
+            },
+        )
 
 
 def _render_tranches() -> None:

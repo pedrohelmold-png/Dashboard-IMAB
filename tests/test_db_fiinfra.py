@@ -8,6 +8,7 @@ from src.db import (
     init_db_fiinfra,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    load_fiinfra_revisions,
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
     load_fiinfra_tranches,
@@ -56,6 +57,11 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(fundos_salvos["ticker"].tolist(), ["IFRA11"])
         self.assertEqual(fundos_salvos.iloc[0]["cota_mercado_fonte"], "B3")
         self.assertEqual(fundos_salvos.iloc[0]["cota_mercado_override"], 0)
+        revisoes = load_fiinfra_revisions(date(2026, 7, 10), self.db_path)
+        self.assertEqual(revisoes["revisao_num"].tolist(), [1])
+        self.assertEqual(revisoes.iloc[0]["observacao"], "inicial")
+        self.assertEqual(revisoes.iloc[0]["zona"], "COMPRAR")
+        self.assertEqual(revisoes.iloc[0]["fundos_count"], 2)
 
     def test_tranches_sao_ordenadas_da_mais_recente(self):
         for data_ref, ticker in [(date(2026, 7, 9), "IFRA11"), (date(2026, 7, 10), "BDIF11")]:

@@ -14,6 +14,7 @@ Tabelas IMA-B   : carrego_historico_imab + composicao_imab
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
@@ -207,9 +208,19 @@ CREATE TABLE IF NOT EXISTS fiinfra_tranches (
     criado_em   TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS fiinfra_snapshot_revisions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    data           TEXT NOT NULL,
+    revisao_num    INTEGER NOT NULL,
+    snapshot_json  TEXT NOT NULL,
+    fundos_json    TEXT NOT NULL,
+    substituido_em TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_fiinfra_snapshots_data ON fiinfra_snapshots(data);
 CREATE INDEX IF NOT EXISTS idx_fiinfra_fundos_data ON fiinfra_fundos_snapshot(data);
 CREATE INDEX IF NOT EXISTS idx_fiinfra_tranches_data ON fiinfra_tranches(data);
+CREATE INDEX IF NOT EXISTS idx_fiinfra_revisions_data ON fiinfra_snapshot_revisions(data);
 """
 
 
@@ -398,6 +409,7 @@ def upsert_fiinfra_snapshot(
         row[key] = int(bool(row[key]))
 
     with _conn(db_path) as conn:
+        _archive_fiinfra_revision(conn, row["data"])
         conn.execute("""
             INSERT OR REPLACE INTO fiinfra_snapshots
               (data, collection_id, data_solicitada, metodologia_version,
@@ -601,6 +613,31 @@ def get_fiinfra_snapshot(ref_date: date, db_path=None) -> Optional[dict]:
         return dict(zip(cols, row))
 
 
+def load_fiinfra_revisions(ref_date: date, db_path=None) -> pd.DataFrame:
+    """Carrega revisoes arquivadas para uma data, da mais nova para a mais antiga."""
+    with _conn(db_path) as conn:
+        df = pd.read_sql(
+            """
+            SELECT id, data, revisao_num, snapshot_json, fundos_json, substituido_em
+            FROM fiinfra_snapshot_revisions
+            WHERE data = ?
+            ORDER BY revisao_num DESC
+            """,
+            conn,
+            params=(str(ref_date),),
+        )
+    if df.empty:
+        return df
+
+    snapshots = df["snapshot_json"].apply(json.loads)
+    df["observacao"] = snapshots.apply(lambda row: row.get("observacao"))
+    df["zona"] = snapshots.apply(lambda row: row.get("zona"))
+    df["metodologia_version"] = snapshots.apply(lambda row: row.get("metodologia_version"))
+    df["coletado_em"] = snapshots.apply(lambda row: row.get("coletado_em"))
+    df["fundos_count"] = df["fundos_json"].apply(lambda value: len(json.loads(value)))
+    return df
+
+
 def load_fiinfra_snapshots(days: int = 252 * 3, db_path=None) -> pd.DataFrame:
     """Carrega historico da Regua FI-Infra, ordenado por data ASC."""
     with _conn(db_path) as conn:
@@ -647,6 +684,61 @@ def load_fiinfra_tranches(limit: int = 100, db_path=None) -> pd.DataFrame:
             parse_dates=["data"],
         )
     return df
+
+
+def _archive_fiinfra_revision(conn: sqlite3.Connection, data_str: str) -> None:
+    snapshot = _fetch_one_dict(
+        conn,
+        "SELECT * FROM fiinfra_snapshots WHERE data = ?",
+        (data_str,),
+    )
+    if not snapshot:
+        return
+    fundos = _fetch_all_dicts(
+        conn,
+        "SELECT * FROM fiinfra_fundos_snapshot WHERE data = ? ORDER BY ticker",
+        (data_str,),
+    )
+    revisao_num = conn.execute(
+        "SELECT COALESCE(MAX(revisao_num), 0) + 1 FROM fiinfra_snapshot_revisions WHERE data = ?",
+        (data_str,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO fiinfra_snapshot_revisions
+          (data, revisao_num, snapshot_json, fundos_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            data_str,
+            revisao_num,
+            json.dumps(snapshot, ensure_ascii=False, default=str),
+            json.dumps(fundos, ensure_ascii=False, default=str),
+        ),
+    )
+
+
+def _fetch_one_dict(
+    conn: sqlite3.Connection,
+    query: str,
+    params: tuple = (),
+) -> Optional[dict]:
+    cursor = conn.execute(query, params)
+    row = cursor.fetchone()
+    if not row:
+        return None
+    cols = [d[0] for d in cursor.description]
+    return dict(zip(cols, row))
+
+
+def _fetch_all_dicts(
+    conn: sqlite3.Connection,
+    query: str,
+    params: tuple = (),
+) -> list[dict]:
+    cursor = conn.execute(query, params)
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
