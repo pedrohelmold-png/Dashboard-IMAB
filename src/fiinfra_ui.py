@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+from src.collector import fetch_fiinfra_fundos, fetch_fiinfra_macro
 from src.db import (
     get_ultimo_carrego,
     get_ultimo_fiinfra_snapshot,
@@ -66,35 +67,64 @@ def render_regua_fiinfra() -> None:
     thresholds = _render_threshold_editor(thresholds)
 
     st.subheader("Snapshot semanal")
+    update_cols = st.columns([1, 1, 3])
+    with update_cols[0]:
+        ref_date = st.date_input("Data", value=date.today())
+    with update_cols[1]:
+        st.write("")
+        st.write("")
+        atualizar = st.button("Atualizar dados oficiais", type="primary", width="stretch")
+
+    if atualizar:
+        with st.spinner("Baixando dados ANBIMA, BCB, B3 e CVM..."):
+            erros = []
+            try:
+                st.session_state["fiinfra_auto_macro"] = fetch_fiinfra_macro(ref_date)
+            except Exception as exc:
+                erros.append(f"macro: {exc}")
+            try:
+                st.session_state["fiinfra_auto_fundos"] = fetch_fiinfra_fundos(ref_date)
+            except Exception as exc:
+                erros.append(f"fundos: {exc}")
+        if erros:
+            st.warning("Atualizacao parcial. " + " | ".join(erros))
+        else:
+            st.success("Dados oficiais atualizados.")
+
+    auto_macro = st.session_state.get("fiinfra_auto_macro", {})
     input_cols = st.columns([1, 1, 1, 1])
     with input_cols[0]:
-        ref_date = st.date_input("Data", value=date.today())
-    with input_cols[1]:
         ntnb = st.number_input(
             "NTN-B longa (% a.a.)",
-            value=_fallback_float(ultimo_snapshot, "ntnb", 6.5),
+            value=_auto_or_fallback(auto_macro, "ntnb", ultimo_snapshot, "ntnb", 6.5),
             step=0.05,
             format="%.2f",
         )
-    with input_cols[2]:
+    with input_cols[1]:
         spread = st.number_input(
             "Spread IDA-Infra (bps)",
             value=_fallback_float(ultimo_snapshot, "spread", 100.0),
             step=5.0,
             format="%.0f",
+            help="Mantido manual ate haver serie ANBIMA estruturada e estavel.",
         )
-    with input_cols[3]:
+    with input_cols[2]:
         mandato = st.selectbox(
             "Mandato",
             options=list(MANDATOS),
             index=_mandato_index(ultimo_snapshot),
         )
+    with input_cols[3]:
+        st.metric("Fonte macro", auto_macro.get("fonte", "Ultimo snapshot/manual"))
 
     macro_cols = st.columns([1, 1, 1])
     with macro_cols[0]:
         cdi = st.number_input(
             "CDI (% a.a.)",
-            value=_fallback_float(ultimo_snapshot, "cdi", _ultimo_imab_value(ultimo_imab, "cdi_anual", 11.0)),
+            value=_auto_or_fallback(
+                auto_macro, "cdi", ultimo_snapshot, "cdi",
+                _ultimo_imab_value(ultimo_imab, "cdi_anual", 11.0),
+            ),
             step=0.05,
             format="%.2f",
         )
@@ -102,9 +132,10 @@ def render_regua_fiinfra() -> None:
         inflacao_implicita = st.number_input(
             "Inflacao implicita (% a.a.)",
             value=_fallback_float(
-                ultimo_snapshot,
+                auto_macro or ultimo_snapshot,
                 "inflacao_implicita",
-                _ultimo_imab_value(ultimo_imab, "ipca_proj", 4.5),
+                _fallback_float(ultimo_snapshot, "inflacao_implicita",
+                                _ultimo_imab_value(ultimo_imab, "ipca_proj", 4.5)),
             ),
             step=0.05,
             format="%.2f",
@@ -132,7 +163,7 @@ def render_regua_fiinfra() -> None:
         alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_implicita)
 
     st.subheader("Fundos monitorados")
-    fundos_base = _fundos_base()
+    fundos_base = _fundos_base(st.session_state.get("fiinfra_auto_fundos"))
     fundos_editados = st.data_editor(
         fundos_base,
         hide_index=True,
@@ -144,6 +175,8 @@ def render_regua_fiinfra() -> None:
             "cota_patrimonial": st.column_config.NumberColumn("Cota patrimonial", format="%.2f"),
             "taxa_total_aa": st.column_config.NumberColumn("Taxa total (% a.a.)", format="%.2f"),
             "duration": st.column_config.NumberColumn("Duration", format="%.2f"),
+            "mercado_data": st.column_config.DateColumn("Data mercado", disabled=True),
+            "patrimonial_data": st.column_config.DateColumn("Data patrimonial", disabled=True),
         },
     )
 
@@ -438,9 +471,25 @@ def _add_signal_trace(
     fig.add_hline(y=caro, line_color="#dc2626", line_dash="dot", row=row, col=1)
 
 
-def _fundos_base() -> pd.DataFrame:
+def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
     latest = load_fiinfra_fundos()
     columns = ["ticker", "cota_mercado", "cota_patrimonial", "taxa_total_aa", "duration"]
+    if dados_auto:
+        anteriores = latest.set_index("ticker").to_dict("index") if not latest.empty else {}
+        rows = []
+        for fundo in dados_auto:
+            ticker = fundo["ticker"]
+            anterior = anteriores.get(ticker, {})
+            rows.append({
+                "ticker": ticker,
+                "cota_mercado": fundo.get("cota_mercado"),
+                "cota_patrimonial": fundo.get("cota_patrimonial"),
+                "taxa_total_aa": anterior.get("taxa_total_aa", 1.0),
+                "duration": anterior.get("duration", 8.0),
+                "mercado_data": fundo.get("cota_mercado_data"),
+                "patrimonial_data": fundo.get("cota_patrimonial_data"),
+            })
+        return pd.DataFrame(rows)
     if not latest.empty:
         return latest[columns].copy()
 
@@ -505,6 +554,19 @@ def _fallback_float(row: Optional[dict], key: str, fallback: float) -> float:
     if value is None or pd.isna(value):
         return float(fallback)
     return float(value)
+
+
+def _auto_or_fallback(
+    auto: dict,
+    auto_key: str,
+    row: Optional[dict],
+    row_key: str,
+    fallback: float,
+) -> float:
+    value = auto.get(auto_key)
+    if value is not None and not pd.isna(value):
+        return float(value)
+    return _fallback_float(row, row_key, fallback)
 
 
 def _ultimo_imab_value(row: Optional[dict], key: str, fallback: float) -> float:

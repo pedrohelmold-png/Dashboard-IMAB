@@ -13,12 +13,30 @@ Fontes:
   du.gerar()            → calendário de dias úteis BR
 """
 import logging
+import io
+import re
+import urllib.request
+import zipfile
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+FIINFRA_FUNDOS = {
+    "IFRA11": "34.633.510/0001-18",
+    "BDIF11": "40.502.607/0001-94",
+    "KDIF11": "26.324.298/0001-89",
+    "JURO11": "42.730.834/0001-00",
+}
+
+B3_COTAHIST_URL = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
+CVM_INF_DIARIO_URL = (
+    "https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/"
+    "inf_diario_fi_{year}{month:02d}.zip"
+)
 
 
 # ── importação lazy (permite import mesmo antes do pip install) ──
@@ -141,6 +159,161 @@ def fetch_ipca_focus(ref_date: date) -> Optional[float]:
     except Exception as exc:
         logger.debug(f"ipca.taxa_projetada({date_str}) sem dado: {exc}")
         return None
+
+
+def fetch_fiinfra_macro(ref_date: date) -> dict:
+    """Coleta os dados macro usados pela regua, com data e fonte."""
+    ntnb_df = fetch_ntnb(ref_date)
+    ntnb = inflacao = duration = None
+    if not ntnb_df.empty and "taxa_indicativa" in ntnb_df:
+        validos = ntnb_df.dropna(subset=["taxa_indicativa"])
+        if not validos.empty:
+            if "duration" in validos and validos["duration"].notna().any():
+                row = validos.loc[validos["duration"].idxmax()]
+                duration = _percent_or_decimal(row.get("duration"), percent=False)
+            else:
+                row = validos.iloc[-1]
+            ntnb_decimal = _percent_or_decimal(row.get("taxa_indicativa"))
+            ntnb = ntnb_decimal * 100 if ntnb_decimal is not None else None
+            implicita_decimal = _percent_or_decimal(row.get("inflacao_implicita"))
+            inflacao = implicita_decimal * 100 if implicita_decimal is not None else None
+
+    di = fetch_di_over(ref_date)
+    ipca = fetch_ipca_focus(ref_date)
+    if inflacao is None and ipca is not None:
+        inflacao = ipca * 100
+    return {
+        "data": ref_date,
+        "ntnb": ntnb,
+        "ntnb_duration": duration,
+        "cdi": di * 100 if di is not None else None,
+        "inflacao_implicita": inflacao,
+        "fonte": "ANBIMA/BCB via pyield",
+    }
+
+
+def fetch_cotacoes_b3(ref_date: date, tickers=None, url: Optional[str] = None) -> dict:
+    """Retorna o ultimo fechamento B3 ate ``ref_date`` para cada ticker."""
+    tickers = {str(t).upper() for t in (tickers or FIINFRA_FUNDOS)}
+    raw = _download_zip(url or B3_COTAHIST_URL.format(year=ref_date.year))
+    encontrados = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        member = next(n for n in archive.namelist() if n.upper().endswith(".TXT"))
+        with archive.open(member) as stream:
+            for raw_line in stream:
+                line = raw_line.decode("latin-1")
+                if line[:2] != "01":
+                    continue
+                ticker = line[12:24].strip().upper()
+                if ticker not in tickers:
+                    continue
+                try:
+                    data_pregao = date.fromisoformat(
+                        f"{line[2:6]}-{line[6:8]}-{line[8:10]}"
+                    )
+                    preco = int(line[108:121]) / 100
+                except (ValueError, IndexError):
+                    continue
+                if data_pregao <= ref_date and (
+                    ticker not in encontrados or data_pregao > encontrados[ticker]["data"]
+                ):
+                    encontrados[ticker] = {
+                        "valor": preco,
+                        "data": data_pregao,
+                        "fonte": "B3 COTAHIST",
+                    }
+    return encontrados
+
+
+def fetch_cotas_cvm(ref_date: date, fundos=None, url: Optional[str] = None) -> dict:
+    """Retorna a ultima cota patrimonial CVM ate a data por ticker."""
+    fundos = fundos or FIINFRA_FUNDOS
+    raw = _download_zip(url or CVM_INF_DIARIO_URL.format(
+        year=ref_date.year, month=ref_date.month
+    ))
+    frames = []
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for member in archive.namelist():
+            if member.lower().endswith(".csv"):
+                with archive.open(member) as stream:
+                    frames.append(pd.read_csv(stream, sep=";", encoding="latin-1", dtype=str))
+    if not frames:
+        return {}
+    df = pd.concat(frames, ignore_index=True)
+    cnpj_col = _first_column(df, "CNPJ_FUNDO_CLASSE", "CNPJ_FUNDO")
+    data_col = _first_column(df, "DT_COMPTC", "Data_Competencia")
+    cota_col = _first_column(df, "VL_QUOTA", "VL_COTA", "Valor_Cota")
+    if not all((cnpj_col, data_col, cota_col)):
+        return {}
+    df["_cnpj"] = df[cnpj_col].map(_only_digits)
+    df["_data"] = pd.to_datetime(df[data_col], errors="coerce").dt.date
+    df["_cota"] = df[cota_col].map(_parse_decimal)
+    resultado = {}
+    for ticker, cnpj in fundos.items():
+        rows = df[(df["_cnpj"] == _only_digits(cnpj)) & (df["_data"] <= ref_date)]
+        rows = rows.dropna(subset=["_data", "_cota"]).sort_values("_data")
+        if not rows.empty:
+            row = rows.iloc[-1]
+            resultado[ticker] = {
+                "valor": float(row["_cota"]),
+                "data": row["_data"],
+                "fonte": "CVM Informe Diario",
+            }
+    return resultado
+
+
+def fetch_fiinfra_fundos(ref_date: date, fundos=None) -> list[dict]:
+    """Combina fechamentos B3 e cotas patrimoniais CVM."""
+    fundos = fundos or FIINFRA_FUNDOS
+    mercado = fetch_cotacoes_b3(ref_date, fundos)
+    patrimonial = fetch_cotas_cvm(ref_date, fundos)
+    return [{
+        "ticker": ticker,
+        "cnpj": cnpj,
+        "cota_mercado": mercado.get(ticker, {}).get("valor"),
+        "cota_mercado_data": mercado.get(ticker, {}).get("data"),
+        "cota_mercado_fonte": mercado.get(ticker, {}).get("fonte"),
+        "cota_patrimonial": patrimonial.get(ticker, {}).get("valor"),
+        "cota_patrimonial_data": patrimonial.get(ticker, {}).get("data"),
+        "cota_patrimonial_fonte": patrimonial.get(ticker, {}).get("fonte"),
+    } for ticker, cnpj in fundos.items()]
+
+
+@lru_cache(maxsize=8)
+def _download_zip(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "IMAB-dashboard/1.0"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def _only_digits(value) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _parse_decimal(value) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _first_column(df: pd.DataFrame, *candidates) -> Optional[str]:
+    return next((col for col in candidates if col in df.columns), None)
+
+
+def _percent_or_decimal(value, percent: bool = True) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not percent:
+        return parsed
+    return parsed / 100 if abs(parsed) > 1 else parsed
 
 
 # ─────────────────────────────────────────────────────────────────
