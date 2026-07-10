@@ -28,6 +28,11 @@ dias uteis e marca o valor como defasado. A NTN-B de referencia e o titulo com
 duration mais proxima da duration mediana dos fundos; vencimento, duration,
 data-base e status aparecem na tela e sao gravados no snapshot.
 
+Na Regua FI-Infra, o CDI liquido real e deflacionado pelo **IPCA Focus 12m**.
+A inflacao implicita da NTN-B de referencia permanece separada como breakeven
+de mercado e funciona apenas como fallback explicitamente identificado se o
+Focus estiver indisponivel.
+
 O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O ultimo valor salvo e

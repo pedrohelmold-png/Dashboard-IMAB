@@ -211,8 +211,19 @@ def fetch_fiinfra_macro(
         "inflacao_implicita": None,
         "inflacao_data": None,
         "inflacao_status": "INDISPONIVEL",
-        "fonte": "ANBIMA/BCB via pyield",
+        "ipca_focus": None,
+        "ipca_focus_data": None,
+        "ipca_focus_status": "INDISPONIVEL",
+        "fonte": "ANBIMA + BCB Focus/DI",
     }
+
+    focus = fetch_ipca_focus_info(ref_date)
+    if focus:
+        resultado.update({
+            "ipca_focus": focus["valor"],
+            "ipca_focus_data": focus["data"],
+            "ipca_focus_status": _freshness_status(focus["data"], ref_date),
+        })
 
     for data_busca in _lookback_dates(ref_date, lookback_days):
         ntnb_df = fetch_ntnb(data_busca)

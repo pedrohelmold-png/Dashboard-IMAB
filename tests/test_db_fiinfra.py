@@ -42,6 +42,7 @@ class DbFiInfraTests(unittest.TestCase):
         self.assertEqual(ultimo["observacao"], "revisado")
         self.assertEqual(ultimo["venda_bloqueada"], 0)
         self.assertIn("ntnb_status", ultimo)
+        self.assertEqual(ultimo["inflacao_usada_fonte"], "focus")
         self.assertEqual(len(load_fiinfra_snapshots(db_path=self.db_path)), 1)
         fundos_salvos = load_fiinfra_fundos(date(2026, 7, 10), self.db_path)
         self.assertEqual(fundos_salvos["ticker"].tolist(), ["IFRA11"])
@@ -66,6 +67,9 @@ class DbFiInfraTests(unittest.TestCase):
                 "juro_estado": "BARATO", "spread_estado": "BARATO", "excesso_estado": "BARATO",
                 "juro_pos": 0, "spread_pos": 0, "excesso_pos": 0, "mandato": "Juro real",
                 "cdi": 12, "aliquota": 0.15, "inflacao_implicita": 5,
+                "ipca_focus": 4.1, "ipca_focus_data": date(2026, 7, 3),
+                "ipca_focus_status": "DEFASADO", "inflacao_usada": 4.1,
+                "inflacao_usada_fonte": "focus",
                 "alternativa_liquida_real": 5.5, "yield_fundo_real": 8,
                 "acao": "Compra escalonada", "destino": "FI-Infra",
                 "venda_bloqueada": False, "observacao": "inicial"}

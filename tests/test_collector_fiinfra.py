@@ -55,10 +55,10 @@ class CollectorFiInfraTests(unittest.TestCase):
         self.assertEqual(info["data"], date(2026, 7, 3))
         self.assertAlmostEqual(info["valor"], 4.1001)
 
-    @patch("src.collector.fetch_ipca_focus", return_value=None)
+    @patch("src.collector.fetch_ipca_focus_info")
     @patch("src.collector.fetch_di_over")
     @patch("src.collector.fetch_ntnb")
-    def test_macro_recua_e_marca_dado_defasado(self, ntnb, di, _ipca):
+    def test_macro_recua_e_marca_dado_defasado(self, ntnb, di, focus):
         vazio = pd.DataFrame()
         curva = pd.DataFrame([{
             "data_vencimento": date(2040, 8, 15), "duration": 8.8,
@@ -66,11 +66,16 @@ class CollectorFiInfraTests(unittest.TestCase):
         }])
         ntnb.side_effect = [vazio, curva]
         di.side_effect = [None, 0.1415]
+        focus.return_value = {
+            "valor": 4.1, "data": date(2026, 7, 3), "fonte": "BCB Focus"
+        }
         result = fetch_fiinfra_macro(date(2026, 7, 10), target_duration=8.0)
         self.assertEqual(result["ntnb_data"], date(2026, 7, 9))
         self.assertEqual(result["ntnb_status"], "DEFASADO")
         self.assertEqual(result["cdi_status"], "DEFASADO")
         self.assertEqual(result["ntnb_vencimento"], date(2040, 8, 15))
+        self.assertEqual(result["ipca_focus"], 4.1)
+        self.assertEqual(result["ipca_focus_status"], "DEFASADO")
 
     @patch("src.collector._download_zip")
     def test_b3_escolhe_ultimo_fechamento_ate_data(self, download):

@@ -132,7 +132,7 @@ def render_regua_fiinfra() -> None:
             f"({auto_macro.get('cdi_status', 'FALLBACK')})."
         )
 
-    macro_cols = st.columns([1, 1, 1])
+    macro_cols = st.columns([1, 1, 1, 1])
     with macro_cols[0]:
         cdi = st.number_input(
             "CDI (% a.a.)",
@@ -144,6 +144,17 @@ def render_regua_fiinfra() -> None:
             format="%.2f",
         )
     with macro_cols[1]:
+        ipca_focus = st.number_input(
+            "IPCA Focus 12m (% a.a.)",
+            value=_auto_or_fallback(
+                auto_macro, "ipca_focus", ultimo_snapshot, "ipca_focus",
+                _ultimo_imab_value(ultimo_imab, "ipca_focus", 4.5),
+            ),
+            step=0.05,
+            format="%.2f",
+            help="Mediana suavizada oficial do BCB; usada para deflacionar o CDI.",
+        )
+    with macro_cols[2]:
         inflacao_implicita = st.number_input(
             "Inflacao implicita (% a.a.)",
             value=_fallback_float(
@@ -155,7 +166,7 @@ def render_regua_fiinfra() -> None:
             step=0.05,
             format="%.2f",
         )
-    with macro_cols[2]:
+    with macro_cols[3]:
         aliquota_pct = st.number_input(
             "Aliquota alternativa (%)",
             value=_fallback_float(ultimo_snapshot, "aliquota", 0.15) * 100,
@@ -165,6 +176,17 @@ def render_regua_fiinfra() -> None:
             format="%.1f",
         )
     aliquota = aliquota_pct / 100
+    focus_disponivel = auto_macro.get("ipca_focus") is not None or (
+        ultimo_snapshot is not None and ultimo_snapshot.get("ipca_focus") is not None
+    ) or (ultimo_imab is not None and ultimo_imab.get("ipca_focus") is not None)
+    inflacao_usada = ipca_focus if focus_disponivel else inflacao_implicita
+    inflacao_usada_fonte = "focus" if focus_disponivel else "implicita_fallback"
+    st.caption(
+        f"Inflação usada na alternativa real: {inflacao_usada:.2f}% "
+        f"({inflacao_usada_fonte}). Focus data-base: "
+        f"{auto_macro.get('ipca_focus_data') or 'último valor salvo/manual'} "
+        f"({auto_macro.get('ipca_focus_status', 'FALLBACK')})."
+    )
 
     if mandato == MANDATO_JURO_REAL:
         imab_real = st.number_input(
@@ -175,7 +197,7 @@ def render_regua_fiinfra() -> None:
         )
         alternativa_liquida_real = imab_real * (1 - aliquota)
     else:
-        alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_implicita)
+        alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_usada)
 
     st.subheader("Fundos monitorados")
     fundos_base = _fundos_base(st.session_state.get("fiinfra_auto_fundos"))
@@ -242,6 +264,9 @@ def render_regua_fiinfra() -> None:
             cdi=cdi,
             aliquota=aliquota,
             inflacao_implicita=inflacao_implicita,
+            ipca_focus=ipca_focus,
+            inflacao_usada=inflacao_usada,
+            inflacao_usada_fonte=inflacao_usada_fonte,
             alternativa_liquida_real=alternativa_liquida_real,
             yield_fundo_real=yield_fundo_real,
             execucao=execucao,
@@ -420,7 +445,11 @@ def _render_history(thresholds: dict) -> None:
     fig.update_yaxes(gridcolor="#f1f5f9")
     st.plotly_chart(fig, width="stretch")
 
-    tabela = hist[["data", "ntnb", "spread", "excesso_mediano", "zona", "acao", "destino"]].copy()
+    history_columns = [
+        "data", "ntnb", "spread", "excesso_mediano", "ipca_focus",
+        "inflacao_implicita", "inflacao_usada_fonte", "zona", "acao", "destino",
+    ]
+    tabela = hist[[col for col in history_columns if col in hist.columns]].copy()
     st.dataframe(tabela, hide_index=True, width="stretch")
 
 
@@ -536,6 +565,9 @@ def _snapshot_payload(
     cdi: float,
     aliquota: float,
     inflacao_implicita: float,
+    ipca_focus: float,
+    inflacao_usada: float,
+    inflacao_usada_fonte: str,
     alternativa_liquida_real: Optional[float],
     yield_fundo_real: Optional[float],
     execucao: dict,
@@ -560,6 +592,11 @@ def _snapshot_payload(
         "cdi": cdi,
         "aliquota": aliquota,
         "inflacao_implicita": inflacao_implicita,
+        "ipca_focus": ipca_focus,
+        "ipca_focus_data": auto_macro.get("ipca_focus_data"),
+        "ipca_focus_status": auto_macro.get("ipca_focus_status", "MANUAL"),
+        "inflacao_usada": inflacao_usada,
+        "inflacao_usada_fonte": inflacao_usada_fonte,
         "alternativa_liquida_real": alternativa_liquida_real,
         "yield_fundo_real": yield_fundo_real,
         "acao": execucao["acao"],
@@ -614,6 +651,7 @@ def _render_update_result(macro: dict, fundos: list[dict], erros: list[str]) -> 
         macro.get("ntnb_status", "INDISPONIVEL"),
         macro.get("cdi_status", "INDISPONIVEL"),
         macro.get("inflacao_status", "INDISPONIVEL"),
+        macro.get("ipca_focus_status", "INDISPONIVEL"),
     ]
     for fundo in fundos:
         statuses.extend([

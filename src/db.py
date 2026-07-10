@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshots (
     cdi                       REAL,
     aliquota                  REAL,
     inflacao_implicita        REAL,
+    ipca_focus                REAL,
+    ipca_focus_data           TEXT,
+    ipca_focus_status         TEXT,
+    inflacao_usada            REAL,
+    inflacao_usada_fonte      TEXT,
     alternativa_liquida_real  REAL,
     yield_fundo_real          REAL,
     acao                      TEXT,
@@ -219,6 +224,9 @@ def init_db_fiinfra(db_path=None) -> None:
             "ntnb_data": "TEXT", "ntnb_status": "TEXT", "cdi_data": "TEXT",
             "cdi_status": "TEXT", "inflacao_data": "TEXT",
             "inflacao_status": "TEXT", "coletado_em": "TEXT",
+            "ipca_focus": "REAL", "ipca_focus_data": "TEXT",
+            "ipca_focus_status": "TEXT", "inflacao_usada": "REAL",
+            "inflacao_usada_fonte": "TEXT",
         })
         for chave, valor in DEFAULT_THRESHOLDS.items():
             conn.execute(
@@ -308,9 +316,14 @@ def upsert_fiinfra_snapshot(
     for key in (
         "ntnb_vencimento", "ntnb_duration_ref", "ntnb_data", "ntnb_status",
         "cdi_data", "cdi_status", "inflacao_data", "inflacao_status", "coletado_em",
+        "ipca_focus", "ipca_focus_data", "ipca_focus_status",
+        "inflacao_usada", "inflacao_usada_fonte",
     ):
         row.setdefault(key, None)
-    for key in ("ntnb_vencimento", "ntnb_data", "cdi_data", "inflacao_data", "coletado_em"):
+    for key in (
+        "ntnb_vencimento", "ntnb_data", "cdi_data", "inflacao_data", "coletado_em",
+        "ipca_focus_data",
+    ):
         if row[key] is not None:
             row[key] = str(row[key])
 
@@ -320,7 +333,9 @@ def upsert_fiinfra_snapshot(
               (data, ntnb, spread, excesso_mediano, duration_mediana, zona,
                juro_estado, spread_estado, excesso_estado,
                juro_pos, spread_pos, excesso_pos, mandato, cdi, aliquota,
-               inflacao_implicita, alternativa_liquida_real, yield_fundo_real,
+               inflacao_implicita, ipca_focus, ipca_focus_data, ipca_focus_status,
+               inflacao_usada, inflacao_usada_fonte,
+               alternativa_liquida_real, yield_fundo_real,
                acao, destino, venda_bloqueada, observacao,
                ntnb_vencimento, ntnb_duration_ref, ntnb_data, ntnb_status,
                cdi_data, cdi_status, inflacao_data, inflacao_status, coletado_em)
@@ -328,7 +343,9 @@ def upsert_fiinfra_snapshot(
               (:data, :ntnb, :spread, :excesso_mediano, :duration_mediana, :zona,
                :juro_estado, :spread_estado, :excesso_estado,
                :juro_pos, :spread_pos, :excesso_pos, :mandato, :cdi, :aliquota,
-               :inflacao_implicita, :alternativa_liquida_real, :yield_fundo_real,
+               :inflacao_implicita, :ipca_focus, :ipca_focus_data, :ipca_focus_status,
+               :inflacao_usada, :inflacao_usada_fonte,
+               :alternativa_liquida_real, :yield_fundo_real,
                :acao, :destino, :venda_bloqueada, :observacao,
                :ntnb_vencimento, :ntnb_duration_ref, :ntnb_data, :ntnb_status,
                :cdi_data, :cdi_status, :inflacao_data, :inflacao_status, :coletado_em)
