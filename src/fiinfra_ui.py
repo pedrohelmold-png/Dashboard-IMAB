@@ -20,7 +20,13 @@ from src.db import (
     get_ultimo_fiinfra_snapshot,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    load_fiinfra_market_observations,
+    load_fiinfra_portfolio_settings,
+    load_fiinfra_positions,
+    load_latest_fiinfra_assumption_set,
     save_fiinfra_collection_observation,
+    save_fiinfra_portfolio_settings,
+    save_fiinfra_assumption_set,
     load_fiinfra_revisions,
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
@@ -77,6 +83,7 @@ def render_regua_fiinfra() -> None:
         "Sinal tatico para a classe FI-Infra: juro real, spread de credito e "
         "score de desconto relativo. Nao seleciona ticker automaticamente."
     )
+    _render_observation_health()
 
     thresholds = _render_threshold_editor(thresholds)
 
@@ -257,7 +264,7 @@ def render_regua_fiinfra() -> None:
         alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_usada)
 
     st.subheader("Fundos monitorados")
-    fundos_base = _fundos_base(auto_fundos)
+    fundos_base = _fundos_base(auto_fundos, load_latest_fiinfra_assumption_set())
     fundos_base = _render_premissas_lote(fundos_base, collection_id)
     fundos_editados = st.data_editor(
         fundos_base,
@@ -339,6 +346,7 @@ def render_regua_fiinfra() -> None:
         execucao,
         _decision_confidence(qualidade, cobertura, len(fundos_calc)),
     )
+    _render_portfolio(avaliacao["zona"])
     _render_signal_grid(
         ntnb,
         spread,
@@ -467,6 +475,85 @@ def _render_zona(avaliacao: dict, execucao: dict, confidence: str) -> None:
     )
 
 
+def _render_observation_health() -> None:
+    observations = load_fiinfra_market_observations(days=365)
+    if observations.empty:
+        st.info("Ainda nao ha observacoes FI-Infra persistidas. Atualize os dados oficiais.")
+        return
+    latest_date = observations["data_solicitada"].max()
+    latest = observations[observations["data_solicitada"] == latest_date]
+    coverage = latest["ticker"].nunique()
+    collections = observations["collection_id"].nunique()
+    cols = st.columns(3)
+    cols[0].metric("Observacoes FI-Infra", len(observations))
+    cols[1].metric("Coletas registradas", collections)
+    cols[2].metric("Cobertura mais recente", f"{coverage}/4")
+    st.caption(f"Ultima observacao solicitada: {latest_date:%d/%m/%Y}.")
+
+
+def _render_portfolio(zona: str) -> None:
+    """Mostra exposicao agregada e uma proposta, sem enviar ordens."""
+    st.subheader("Carteira e proposta de alocacao")
+    settings = load_fiinfra_portfolio_settings()
+    with st.expander("Parametros da carteira", expanded=False):
+        with st.form("fiinfra_portfolio_settings"):
+            patrimonio = st.number_input("Patrimonio de referencia (R$)", min_value=0.0,
+                                         value=float(settings["patrimonio"]), step=1000.0)
+            peso_alvo = st.number_input("Peso-alvo FI-Infra (%)", min_value=0.0, max_value=100.0,
+                                        value=float(settings["peso_alvo"]), step=0.5)
+            peso_maximo = st.number_input("Peso maximo FI-Infra (%)", min_value=0.0, max_value=100.0,
+                                          value=float(settings["peso_maximo"]), step=0.5)
+            tranche = st.number_input("Tranche maxima (% do patrimonio)", min_value=0.0, max_value=100.0,
+                                      value=float(settings["tranche"]), step=0.5)
+            if st.form_submit_button("Salvar parametros da carteira"):
+                try:
+                    save_fiinfra_portfolio_settings({
+                        "patrimonio": patrimonio, "peso_alvo": peso_alvo,
+                        "peso_maximo": peso_maximo, "tranche": tranche,
+                    })
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Parametros da carteira salvos.")
+                    st.rerun()
+
+    positions = load_fiinfra_positions()
+    market = load_fiinfra_market_observations(days=14)
+    if not positions.empty and not market.empty:
+        latest_market = market.sort_values("coletado_em", ascending=False).drop_duplicates("ticker")
+        positions = positions.merge(latest_market[["ticker", "cota_mercado"]], on="ticker", how="left")
+        positions["valor_mercado"] = positions["quantidade"] * positions["cota_mercado"]
+        valor_atual = float(positions["valor_mercado"].sum())
+    else:
+        valor_atual = 0.0
+    patrimonio = settings["patrimonio"]
+    peso_atual = valor_atual / patrimonio * 100 if patrimonio > 0 else None
+    peso_base = peso_atual or 0.0
+    if zona == ZONA_COMPRAR:
+        ajuste = min(settings["tranche"], max(0.0, settings["peso_maximo"] - peso_base))
+        proposta = "Aumentar"
+    elif zona == ZONA_REDUZIR:
+        ajuste = -min(settings["tranche"], peso_base)
+        proposta = "Reduzir"
+    else:
+        ajuste = 0.0
+        proposta = "Manter"
+    cols = st.columns(4)
+    cols[0].metric("Valor FI-Infra", _fmt(valor_atual, " R$"))
+    cols[1].metric("Peso atual", _fmt(peso_atual, "%"))
+    cols[2].metric("Peso-alvo", _fmt(settings["peso_alvo"], "%"))
+    cols[3].metric("Proposta", proposta, delta=f"{ajuste:+.2f} p.p.")
+    if patrimonio <= 0 or settings["tranche"] <= 0:
+        st.info("Informe patrimonio e tranche maxima para dimensionar a proposta.")
+    elif ajuste:
+        st.caption(
+            f"Proposta indicativa: {proposta.lower()} ate R$ {abs(ajuste / 100 * patrimonio):,.2f}; "
+            "a escolha do ticker continua sendo decisao humana."
+        )
+    if not positions.empty:
+        st.dataframe(positions, hide_index=True, width="stretch")
+
+
 def _render_signal_grid(
     ntnb: float,
     spread: float,
@@ -547,6 +634,23 @@ def _render_premissas_lote(fundos_base: pd.DataFrame, collection_id: str) -> pd.
                 st.success(mensagem)
             else:
                 st.warning(mensagem)
+        with st.expander("Versionar conjunto de premissas", expanded=False):
+            fonte = st.text_input("Fonte das premissas", key=f"fiinfra_premissa_fonte_{collection_id}")
+            responsavel = st.text_input("Responsavel", key=f"fiinfra_premissa_responsavel_{collection_id}")
+            data_base = st.date_input("Data-base das premissas", value=date.today(),
+                                      key=f"fiinfra_premissa_data_{collection_id}")
+            observacao = st.text_input("Observacao das premissas", key=f"fiinfra_premissa_obs_{collection_id}")
+            if st.button("Salvar conjunto de premissas", key=f"fiinfra_premissa_salvar_{collection_id}"):
+                try:
+                    assumption_id = save_fiinfra_assumption_set(
+                        {"fonte": fonte, "responsavel": responsavel,
+                         "data_base": data_base, "observacao": observacao},
+                        atualizados.to_dict("records"),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success(f"Conjunto de premissas {assumption_id} salvo.")
         return atualizados
 
 
@@ -1088,7 +1192,7 @@ def _historical_threshold(
     return series
 
 
-def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
+def _fundos_base(dados_auto: Optional[list[dict]] = None, premissas: Optional[dict] = None) -> pd.DataFrame:
     latest = load_fiinfra_fundos()
     columns = [
         "ticker", "cnpj", "cota_mercado", "cota_mercado_original",
@@ -1100,11 +1204,13 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
     if dados_auto:
         anteriores = latest.set_index("ticker").to_dict("index") if not latest.empty else {}
         rows = []
+        valores_premissas = {str(row.get("ticker", "")).upper(): row for row in (premissas or {}).get("valores", [])}
         for fundo in dados_auto:
             ticker = fundo["ticker"]
             anterior = anteriores.get(ticker, {})
-            taxa_total = _prior_or_default(anterior, "taxa_total_aa", None)
-            duration = _prior_or_default(anterior, "duration", None)
+            premissa = valores_premissas.get(ticker, {})
+            taxa_total = _prior_or_default(anterior, "taxa_total_aa", premissa.get("taxa_total_aa"))
+            duration = _prior_or_default(anterior, "duration", premissa.get("duration"))
             rows.append({
                 "ticker": ticker,
                 "cnpj": fundo.get("cnpj"),
@@ -1117,10 +1223,10 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
                 "taxa_total_aa": taxa_total,
                 "duration": duration,
                 "taxa_total_status": anterior.get("taxa_total_status") or (
-                    "HISTORICO" if taxa_total is not None else "PENDENTE_PREMISSA"
+                    "CONJUNTO_PREMISSA" if premissa.get("taxa_total_aa") is not None else "PENDENTE_PREMISSA"
                 ),
                 "duration_status": anterior.get("duration_status") or (
-                    "HISTORICO" if duration is not None else "PENDENTE_PREMISSA"
+                    "CONJUNTO_PREMISSA" if premissa.get("duration") is not None else "PENDENTE_PREMISSA"
                 ),
                 "mercado_data": fundo.get("cota_mercado_data"),
                 "patrimonial_data": fundo.get("cota_patrimonial_data"),

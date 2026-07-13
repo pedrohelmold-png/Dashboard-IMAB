@@ -222,6 +222,23 @@ CREATE TABLE IF NOT EXISTS fiinfra_tranches (
     criado_em   TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS fiinfra_portfolio_settings (
+    chave          TEXT PRIMARY KEY,
+    valor          REAL NOT NULL,
+    atualizado_em  TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_assumption_sets (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    data_base     TEXT NOT NULL,
+    valido_ate    TEXT,
+    fonte         TEXT NOT NULL,
+    responsavel   TEXT NOT NULL,
+    observacao    TEXT,
+    valores_json  TEXT NOT NULL,
+    criado_em     TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS fiinfra_snapshot_revisions (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT NOT NULL,
@@ -624,6 +641,86 @@ def insert_fiinfra_tranche(tranche: dict, db_path=None) -> None:
             INSERT INTO fiinfra_tranches (tipo, data, ticker, qtd, preco, observacao)
             VALUES (:tipo, :data, :ticker, :qtd, :preco, :observacao)
         """, row)
+
+
+def load_fiinfra_portfolio_settings(db_path=None) -> dict:
+    defaults = {
+        "patrimonio": 0.0,
+        "peso_alvo": 0.0,
+        "peso_maximo": 0.0,
+        "tranche": 0.0,
+    }
+    with _conn(db_path) as conn:
+        rows = conn.execute("SELECT chave, valor FROM fiinfra_portfolio_settings").fetchall()
+    return {**defaults, **{key: float(value) for key, value in rows}}
+
+
+def save_fiinfra_assumption_set(metadata: dict, fundos: list[dict], db_path=None) -> int:
+    required = ("data_base", "fonte", "responsavel")
+    if any(not str(metadata.get(key) or "").strip() for key in required):
+        raise ValueError("Premissas exigem data-base, fonte e responsavel.")
+    values = [{key: row.get(key) for key in ("ticker", "taxa_total_aa", "duration")}
+              for row in fundos]
+    with _conn(db_path) as conn:
+        cursor = conn.execute(
+            """INSERT INTO fiinfra_assumption_sets
+               (data_base, valido_ate, fonte, responsavel, observacao, valores_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (str(metadata["data_base"]), _as_text(metadata.get("valido_ate")),
+             metadata["fonte"], metadata["responsavel"], metadata.get("observacao"),
+             json.dumps(values, default=str)),
+        )
+        return int(cursor.lastrowid)
+
+
+def load_latest_fiinfra_assumption_set(db_path=None) -> Optional[dict]:
+    with _conn(db_path) as conn:
+        row = _fetch_one_dict(conn, "SELECT * FROM fiinfra_assumption_sets ORDER BY id DESC LIMIT 1")
+    if row:
+        row["valores"] = json.loads(row.pop("valores_json"))
+    return row
+
+
+def save_fiinfra_portfolio_settings(settings: dict, db_path=None) -> None:
+    allowed = {"patrimonio", "peso_alvo", "peso_maximo", "tranche"}
+    values = {key: float(value) for key, value in settings.items() if key in allowed}
+    if values.get("patrimonio", 0.0) < 0:
+        raise ValueError("Patrimonio nao pode ser negativo.")
+    for key in ("peso_alvo", "peso_maximo", "tranche"):
+        if key in values and not 0 <= values[key] <= 100:
+            raise ValueError(f"{key} deve estar entre 0 e 100.")
+    if values.get("peso_alvo", 0.0) > values.get("peso_maximo", 100.0):
+        raise ValueError("Peso-alvo nao pode exceder peso maximo.")
+    with _conn(db_path) as conn:
+        for key, value in values.items():
+            conn.execute(
+                """
+                INSERT INTO fiinfra_portfolio_settings (chave, valor, atualizado_em)
+                VALUES (?, ?, datetime('now', 'localtime'))
+                ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor,
+                    atualizado_em = excluded.atualizado_em
+                """,
+                (key, value),
+            )
+
+
+def load_fiinfra_positions(db_path=None) -> pd.DataFrame:
+    """Consolida quantidade e custo medio das tranches; nao calcula P&L realizado."""
+    with _conn(db_path) as conn:
+        df = pd.read_sql(
+            """
+            SELECT ticker,
+                   SUM(CASE WHEN tipo = 'Compra' THEN qtd ELSE -qtd END) AS quantidade,
+                   SUM(CASE WHEN tipo = 'Compra' THEN qtd * preco ELSE 0 END)
+                     / NULLIF(SUM(CASE WHEN tipo = 'Compra' THEN qtd ELSE 0 END), 0) AS preco_medio
+            FROM fiinfra_tranches
+            GROUP BY ticker
+            HAVING quantidade != 0
+            ORDER BY ticker
+            """,
+            conn,
+        )
+    return df
 
 
 # ─────────────────────────────────────────────────────────────────

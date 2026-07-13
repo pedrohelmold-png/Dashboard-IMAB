@@ -2,12 +2,15 @@
 config.py — constantes e configurações do dashboard IMA-B 5.
 Edite aqui para ajustar comportamento sem mexer no código.
 """
+import os
 from pathlib import Path
 
 # ── Diretórios ─────────────────────────────────────────────────
 ROOT     = Path(__file__).parent
 DATA_DIR = ROOT / "data"
-DB_PATH  = DATA_DIR / "imab5.db"
+# Defina IMAB_DB_PATH para que o Streamlit e os ETLs usem o mesmo volume
+# persistente em uma implantacao. Sem a variavel, preserva o banco local.
+DB_PATH  = Path(os.environ.get("IMAB_DB_PATH", DATA_DIR / "imab5.db")).expanduser()
 
 # ── Parâmetros do índice ───────────────────────────────────────
 # IMA-B 5: títulos com vencimento até N anos à frente

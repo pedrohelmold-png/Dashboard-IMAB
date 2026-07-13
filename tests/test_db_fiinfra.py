@@ -9,6 +9,9 @@ from src.db import (
     init_db_fiinfra,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    load_fiinfra_portfolio_settings,
+    load_fiinfra_positions,
+    load_latest_fiinfra_assumption_set,
     load_fiinfra_market_observations,
     load_fiinfra_revisions,
     load_fiinfra_schema_meta,
@@ -17,6 +20,8 @@ from src.db import (
     load_fiinfra_tranches,
     restore_fiinfra_revision,
     save_fiinfra_thresholds,
+    save_fiinfra_portfolio_settings,
+    save_fiinfra_assumption_set,
     save_fiinfra_collection_observation,
     upsert_fiinfra_snapshot,
 )
@@ -95,6 +100,33 @@ class DbFiInfraTests(unittest.TestCase):
                                     "qtd": 10, "preco": 95, "observacao": "teste"}, self.db_path)
         tranches = load_fiinfra_tranches(db_path=self.db_path)
         self.assertEqual(tranches.iloc[0]["ticker"], "BDIF11")
+
+    def test_carteira_consolida_tranches_e_guarda_limites(self):
+        insert_fiinfra_tranche({"tipo": "Compra", "data": date.today(), "ticker": "IFRA11",
+                                "qtd": 10, "preco": 90, "observacao": ""}, self.db_path)
+        insert_fiinfra_tranche({"tipo": "Venda", "data": date.today(), "ticker": "IFRA11",
+                                "qtd": 2, "preco": 95, "observacao": ""}, self.db_path)
+        save_fiinfra_portfolio_settings(
+            {"patrimonio": 100000, "peso_alvo": 10, "peso_maximo": 15, "tranche": 2.5},
+            self.db_path,
+        )
+        positions = load_fiinfra_positions(self.db_path)
+        settings = load_fiinfra_portfolio_settings(self.db_path)
+
+        self.assertEqual(positions.iloc[0]["quantidade"], 8)
+        self.assertEqual(positions.iloc[0]["preco_medio"], 90)
+        self.assertEqual(settings["peso_alvo"], 10)
+
+    def test_conjunto_de_premissas_preserva_fonte_e_valores(self):
+        assumption_id = save_fiinfra_assumption_set(
+            {"data_base": date.today(), "fonte": "planilha", "responsavel": "analista"},
+            [{"ticker": "IFRA11", "taxa_total_aa": 0.5, "duration": 8.0}], self.db_path,
+        )
+        saved = load_latest_fiinfra_assumption_set(self.db_path)
+
+        self.assertEqual(saved["id"], assumption_id)
+        self.assertEqual(saved["fonte"], "planilha")
+        self.assertEqual(saved["valores"][0]["ticker"], "IFRA11")
 
     def test_coleta_bruta_e_guardada_sem_snapshot_decisorio(self):
         ref = date.today()

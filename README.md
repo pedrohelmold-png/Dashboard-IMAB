@@ -10,6 +10,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Para usar o mesmo banco em app e ETLs (por exemplo, em um volume persistente),
+defina `IMAB_DB_PATH` antes de iniciar os processos. Use `python backup_db.py`
+para gerar uma copia consistente do SQLite.
+
 `app.py` e o unico ponto de entrada. Selecione **IMA-B 5**, **IMA-B** ou
 **Regua FI-Infra** no menu lateral.
 
@@ -61,6 +65,11 @@ snapshot de decisao. O comando `python fiinfra_etl.py` executa essa coleta sem
 aplicar premissas manuais ou emitir recomendacao; ele e acionado no workflow
 diario junto com IMA-B 5 e IMA-B.
 
+Use `python fiinfra_etl.py --backfill --days 20` para iniciar uma serie recente
+de observacoes. O modo `--strict`, usado no workflow diario, faz a execucao
+falhar quando uma fonte reporta erro, preservando os dados parciais para
+auditoria e tornando a falha visivel no GitHub Actions.
+
 O snapshot da Regua FI-Infra guarda a proveniencia dos principais campos: lote
 de coleta, data solicitada, fontes macro, valor original coletado, status de
 SLA e indicacao de override manual. Os limiares usados na classificacao tambem
@@ -105,6 +114,10 @@ Taxa e duration deixam de receber valores numericos iniciais implicitos quando
 nao existe historico. Nessa situacao, a regua exige premissas explicitas antes
 de liberar uma decisao operacional. O score de desconto e uma heuristica de
 pesquisa, nao um calculo de valor justo ou yield contratual do fundo.
+
+A secao **Carteira e proposta de alocacao** consolida as tranches registradas,
+compara a exposicao atual a limites informados pelo usuario e dimensiona uma
+proposta em reais. Ela e apenas orientativa e nunca envia ordens.
 
 ## Testes
 

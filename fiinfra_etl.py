@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 import pandas as pd
 
-from src.collector import fetch_fiinfra_fundos_result, fetch_fiinfra_macro
+from src.collector import dias_uteis_br, fetch_fiinfra_fundos_result, fetch_fiinfra_macro
 from src.db import init_db_fiinfra, load_fiinfra_fundos, save_fiinfra_collection_observation
 
 
@@ -78,13 +78,30 @@ def coletar_observacoes(ref_date: date, force_refresh: bool = True) -> dict:
     return batch
 
 
+def backfill_observacoes(days: int = 20) -> list[dict]:
+    """Cria serie recente sem gerar snapshots ou premissas de decisao."""
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=max(1, days) * 2)
+    dates = dias_uteis_br(start, end)[-days:]
+    return [coletar_observacoes(ref, force_refresh=False) for ref in dates]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Coleta diaria de observacoes FI-Infra.")
     parser.add_argument("--date", metavar="YYYY-MM-DD", help="Data de referencia; padrao: hoje.")
+    parser.add_argument("--backfill", action="store_true", help="Coleta os ultimos dias uteis.")
+    parser.add_argument("--days", type=int, default=20, help="Dias uteis no backfill; padrao: 20.")
+    parser.add_argument("--strict", action="store_true", help="Retorna erro se alguma fonte falhar.")
     args = parser.parse_args()
-    ref_date = date.fromisoformat(args.date) if args.date else date.today()
+    if args.backfill and args.date:
+        parser.error("Use --backfill ou --date, nao ambos.")
     init_db_fiinfra()
-    coletar_observacoes(ref_date)
+    batches = backfill_observacoes(args.days) if args.backfill else [
+        coletar_observacoes(date.fromisoformat(args.date) if args.date else date.today())
+    ]
+    failures = [batch for batch in batches if batch["erros"]]
+    if args.strict and failures:
+        raise SystemExit(f"{len(failures)} coleta(s) FI-Infra com erro; veja o banco para detalhes.")
 
 
 if __name__ == "__main__":
