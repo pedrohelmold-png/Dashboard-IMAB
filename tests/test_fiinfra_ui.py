@@ -12,6 +12,7 @@ from src.fiinfra_ui import (
     _apply_premissas_lote,
     _collection_error_messages,
     _confirmar_estimativas_fundos,
+    _fundos_com_premissas_pendentes,
     _fundos_base,
     _historical_threshold,
     _json_list_summary,
@@ -295,6 +296,15 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertTrue(base["duration"].isna().all())
         self.assertTrue((base["taxa_total_status"] == "PENDENTE_PREMISSA").all())
         self.assertTrue((base["duration_status"] == "PENDENTE_PREMISSA").all())
+
+    def test_identifica_fundos_com_premissas_manuais_pendentes(self):
+        fundos = pd.DataFrame([
+            {"ticker": "IFRA11", "taxa_total_aa": 0.55, "duration": 8.0},
+            {"ticker": "BDIF11", "taxa_total_aa": None, "duration": 7.5},
+            {"ticker": "KDIF11", "taxa_total_aa": 0.60, "duration": None},
+        ])
+
+        self.assertEqual(_fundos_com_premissas_pendentes(fundos), ["BDIF11", "KDIF11"])
 
     def test_historico_usa_limiares_congelados_com_fallback(self):
         hist = pd.DataFrame({

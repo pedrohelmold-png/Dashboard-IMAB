@@ -83,11 +83,13 @@ def render_regua_fiinfra() -> None:
         "Sinal tatico para a classe FI-Infra: juro real, spread de credito e "
         "score de desconto relativo. Nao seleciona ticker automaticamente."
     )
+    _render_workflow_guide()
     _render_observation_health()
 
     thresholds = _render_threshold_editor(thresholds)
 
-    st.subheader("Snapshot semanal")
+    st.subheader("1. Atualize os dados de mercado")
+    st.info("🔵 Primeiro, atualize os dados oficiais. Os campos automáticos abaixo serão preenchidos ou atualizados pela coleta.")
     update_cols = st.columns([1, 1, 3])
     with update_cols[0]:
         ref_date = st.date_input("Data", value=date.today(), max_value=date.today())
@@ -143,6 +145,10 @@ def render_regua_fiinfra() -> None:
             collection.get("erros", []),
             collection.get("fontes_tentadas"),
         )
+    st.warning(
+        "🟠 Atenção: spread e mandato são decisões manuais. Confira a fonte e a data-base "
+        "antes de continuar para as premissas dos fundos."
+    )
     input_cols = st.columns([1, 1, 1, 1])
     with input_cols[0]:
         ntnb = st.number_input(
@@ -154,7 +160,7 @@ def render_regua_fiinfra() -> None:
         )
     with input_cols[1]:
         spread = st.number_input(
-            "Spread de credito (bps)",
+            "🟠 Spread de credito (bps) — manual",
             value=_fallback_float(ultimo_snapshot, "spread", 100.0),
             step=5.0,
             format="%.0f",
@@ -166,7 +172,7 @@ def render_regua_fiinfra() -> None:
         )
     with input_cols[2]:
         mandato = st.selectbox(
-            "Mandato",
+            "🟠 Mandato do snapshot — manual",
             options=list(MANDATOS),
             index=_mandato_index(ultimo_snapshot),
             key=f"fiinfra_mandato_{collection_id}",
@@ -211,7 +217,7 @@ def render_regua_fiinfra() -> None:
         )
     with macro_cols[2]:
         inflacao_implicita = st.number_input(
-            "Inflacao implicita (% a.a.)",
+            "🟠 Inflacao implicita (% a.a.) — fallback manual",
             value=_fallback_float(
                 auto_macro or ultimo_snapshot,
                 "inflacao_implicita",
@@ -224,7 +230,7 @@ def render_regua_fiinfra() -> None:
         )
     with macro_cols[3]:
         aliquota_pct = st.number_input(
-            "Aliquota alternativa (%)",
+            "🟠 Aliquota alternativa (%) — manual",
             value=_fallback_float(ultimo_snapshot, "aliquota", 0.15) * 100,
             min_value=0.0,
             max_value=35.0,
@@ -263,9 +269,19 @@ def render_regua_fiinfra() -> None:
     else:
         alternativa_liquida_real = calcular_cdi_liquido_real(cdi, aliquota, inflacao_usada)
 
-    st.subheader("Fundos monitorados")
+    st.subheader("2. Complete as premissas dos fundos")
     fundos_base = _fundos_base(auto_fundos, load_latest_fiinfra_assumption_set())
+    pendentes_premissas = _fundos_com_premissas_pendentes(fundos_base)
+    if pendentes_premissas:
+        st.warning(
+            f"🟠 Ação necessária: informe taxa e duration para {len(pendentes_premissas)} fundo(s): "
+            + ", ".join(pendentes_premissas)
+            + ". Use o bloco em lote ou edite a tabela abaixo."
+        )
+    else:
+        st.success("🟢 Premissas de taxa e duration completas. Revise os valores antes de salvar o snapshot.")
     fundos_base = _render_premissas_lote(fundos_base, collection_id)
+    st.caption("🟠 As colunas com este ícone são premissas manuais. Cotações e datas são alimentadas pela coleta.")
     fundos_editados = st.data_editor(
         fundos_base,
         hide_index=True,
@@ -275,8 +291,8 @@ def render_regua_fiinfra() -> None:
             "ticker": st.column_config.TextColumn("Ticker", disabled=True),
             "cota_mercado": st.column_config.NumberColumn("Cota mercado", format="%.2f"),
             "cota_patrimonial": st.column_config.NumberColumn("Cota patrimonial", format="%.2f"),
-            "taxa_total_aa": st.column_config.NumberColumn("Taxa total (% a.a.)", format="%.2f"),
-            "duration": st.column_config.NumberColumn("Duration", format="%.2f"),
+            "taxa_total_aa": st.column_config.NumberColumn("🟠 Taxa total (% a.a.)", format="%.2f"),
+            "duration": st.column_config.NumberColumn("🟠 Duration", format="%.2f"),
             "mercado_data": st.column_config.DateColumn("Data mercado", disabled=True),
             "patrimonial_data": st.column_config.DateColumn("Data patrimonial", disabled=True),
             "mercado_status": st.column_config.TextColumn("Status mercado", disabled=True),
@@ -327,6 +343,7 @@ def render_regua_fiinfra() -> None:
             "Cobertura insuficiente para uma recomendacao operacional. "
             "Sao necessarios pelo menos 3 fundos com dados completos."
         )
+        _render_portfolio(None)
         _render_history(thresholds)
         _render_revisions(ref_date)
         _render_tranches()
@@ -362,7 +379,9 @@ def render_regua_fiinfra() -> None:
         collection, cobertura, qualidade,
     )
 
-    observacao = st.text_area("Observacao do snapshot", height=80)
+    st.subheader("3. Revise e salve")
+    st.success("🟢 Com os dados e premissas conferidos, registre o snapshot para manter o histórico auditável.")
+    observacao = st.text_area("Observacao do snapshot (opcional)", height=80)
     quality_issues = qualidade["issues"]
 
     confirmar = True
@@ -448,6 +467,33 @@ def _render_threshold_editor(thresholds: dict) -> dict:
     return thresholds
 
 
+def _render_workflow_guide() -> None:
+    """Explica o percurso sem depender apenas de cor para orientar o operador."""
+    cols = st.columns(3)
+    steps = [
+        ("🔵 1. Coletar", "Atualize ANBIMA, BCB, B3 e CVM."),
+        ("🟠 2. Conferir", "Preencha ou valide as premissas manuais."),
+        ("🟢 3. Registrar", "Revise e salve o snapshot semanal."),
+    ]
+    for col, (title, detail) in zip(cols, steps):
+        with col:
+            st.markdown(f"**{title}**")
+            st.caption(detail)
+
+
+def _fundos_com_premissas_pendentes(fundos: pd.DataFrame) -> list[str]:
+    """Retorna tickers que ainda impedem uma análise auditável."""
+    if fundos.empty:
+        return []
+    required = {"ticker", "taxa_total_aa", "duration"}
+    if not required.issubset(fundos.columns):
+        return []
+    pendentes = fundos[
+        fundos["taxa_total_aa"].isna() | fundos["duration"].isna()
+    ]
+    return pendentes["ticker"].astype(str).tolist()
+
+
 def _render_zona(avaliacao: dict, execucao: dict, confidence: str) -> None:
     zona = avaliacao["zona"]
     text_color, bg_color, border_color = _ZONA_STYLE[zona]
@@ -491,19 +537,27 @@ def _render_observation_health() -> None:
     st.caption(f"Ultima observacao solicitada: {latest_date:%d/%m/%Y}.")
 
 
-def _render_portfolio(zona: str) -> None:
+def _render_portfolio(zona: Optional[str]) -> None:
     """Mostra exposicao agregada e uma proposta, sem enviar ordens."""
     st.subheader("Carteira e proposta de alocacao")
     settings = load_fiinfra_portfolio_settings()
-    with st.expander("Parametros da carteira", expanded=False):
+    configuracao_pendente = any(
+        float(settings[key]) <= 0 for key in ("patrimonio", "peso_alvo", "peso_maximo", "tranche")
+    )
+    if configuracao_pendente:
+        st.warning(
+            "🟠 Para dimensionar a proposta, complete os parâmetros da carteira. "
+            "Eles são pessoais e não são preenchidos pela coleta."
+        )
+    with st.expander("🟠 Parâmetros manuais da carteira", expanded=configuracao_pendente):
         with st.form("fiinfra_portfolio_settings"):
-            patrimonio = st.number_input("Patrimonio de referencia (R$)", min_value=0.0,
+            patrimonio = st.number_input("🟠 Patrimonio de referencia (R$)", min_value=0.0,
                                          value=float(settings["patrimonio"]), step=1000.0)
-            peso_alvo = st.number_input("Peso-alvo FI-Infra (%)", min_value=0.0, max_value=100.0,
+            peso_alvo = st.number_input("🟠 Peso-alvo FI-Infra (%)", min_value=0.0, max_value=100.0,
                                         value=float(settings["peso_alvo"]), step=0.5)
-            peso_maximo = st.number_input("Peso maximo FI-Infra (%)", min_value=0.0, max_value=100.0,
+            peso_maximo = st.number_input("🟠 Peso maximo FI-Infra (%)", min_value=0.0, max_value=100.0,
                                           value=float(settings["peso_maximo"]), step=0.5)
-            tranche = st.number_input("Tranche maxima (% do patrimonio)", min_value=0.0, max_value=100.0,
+            tranche = st.number_input("🟠 Tranche maxima (% do patrimonio)", min_value=0.0, max_value=100.0,
                                       value=float(settings["tranche"]), step=0.5)
             if st.form_submit_button("Salvar parametros da carteira"):
                 try:
@@ -537,7 +591,7 @@ def _render_portfolio(zona: str) -> None:
         proposta = "Reduzir"
     else:
         ajuste = 0.0
-        proposta = "Manter"
+        proposta = "Aguardar sinal" if zona is None else "Manter"
     cols = st.columns(4)
     cols[0].metric("Valor FI-Infra", _fmt(valor_atual, " R$"))
     cols[1].metric("Peso atual", _fmt(peso_atual, "%"))
@@ -615,10 +669,11 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
 
 
 def _render_premissas_lote(fundos_base: pd.DataFrame, collection_id: str) -> pd.DataFrame:
-    with st.expander("Premissas taxa/duration em lote", expanded=False):
+    pendentes = _fundos_com_premissas_pendentes(fundos_base)
+    with st.expander("🟠 Premissas manuais: taxa e duration em lote", expanded=bool(pendentes)):
         st.caption(
-            "Cole CSV com colunas ticker, taxa_total_aa e duration. "
-            "Separador virgula ou ponto-e-virgula; aceita decimal com virgula."
+            "Ação necessária para fundos pendentes: cole CSV com ticker, taxa_total_aa e duration. "
+            "Separador vírgula ou ponto-e-vírgula; aceita decimal com vírgula."
         )
         texto = st.text_area(
             "Premissas em lote",
