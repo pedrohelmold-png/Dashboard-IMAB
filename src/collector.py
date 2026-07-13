@@ -19,7 +19,7 @@ import re
 import urllib.parse
 import urllib.request
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from threading import Lock
 import time
 from typing import Optional
@@ -40,6 +40,15 @@ FIINFRA_FUNDOS = {
     "KDIF11": "26.324.298/0001-89",
     "JURO11": "42.730.834/0001-00",
 }
+
+# Fontes primarias. Valores de taxa e duration sao premissas de carteira e,
+# diferentemente das cotas B3/CVM, nem todas as gestoras as publicam em API.
+KDIF11_PAGE_URL = "https://www.kinea.com.br/fundos/infra-kdif11/"
+IFRA11_REPORT_URL = "https://assetfront.arquivosparceiros.cloud.itau.com.br/FND/IFRA11_mensal.pdf"
+JURO11_REPORT_URL = (
+    "https://bvmf.bmfbovespa.com.br/sig/FormConsultaPdfDocumentoFundos.asp?"
+    "cod=0&cod_neg=JURO11&strData=2026-02-06T08%3A49%3A23.71&strSigla=JURO&tipo_comunicado="
+)
 
 B3_COTAHIST_URL = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
 CVM_INF_DIARIO_URL = (
@@ -488,6 +497,17 @@ def fetch_fiinfra_fundos_result(
         logger.warning("Falha na coleta CVM FI-Infra: %s", exc)
         patrimonial = {}
         erros["cvm"] = str(exc)
+    try:
+        premissas_result = fetch_fiinfra_premissas(
+            ref_date, force_refresh=force_refresh
+        )
+        premissas = premissas_result["premissas"]
+        fontes_tentadas["premissas"] = premissas_result["fontes_tentadas"]
+        erros.update(premissas_result["erros"])
+    except Exception as exc:
+        logger.warning("Falha na coleta de premissas FI-Infra: %s", exc)
+        premissas = {}
+        erros["premissas"] = str(exc)
     rows = [{
         "ticker": ticker,
         "cnpj": cnpj,
@@ -503,6 +523,18 @@ def fetch_fiinfra_fundos_result(
         "cota_patrimonial_status": _freshness_status(
             patrimonial.get(ticker, {}).get("data"), ref_date, max_business_days=2
         ),
+        "taxa_total_aa": premissas.get(ticker, {}).get("taxa_total_aa"),
+        "taxa_total_data": premissas.get(ticker, {}).get("data"),
+        "taxa_total_fonte": premissas.get(ticker, {}).get("fonte"),
+        "taxa_total_status": _freshness_status(
+            premissas.get(ticker, {}).get("data"), ref_date, max_business_days=35
+        ),
+        "duration": premissas.get(ticker, {}).get("duration"),
+        "duration_data": premissas.get(ticker, {}).get("data"),
+        "duration_fonte": premissas.get(ticker, {}).get("fonte"),
+        "duration_status": _freshness_status(
+            premissas.get(ticker, {}).get("data"), ref_date, max_business_days=35
+        ),
     } for ticker, cnpj in fundos.items()]
     return {
         "fundos": rows,
@@ -512,7 +544,110 @@ def fetch_fiinfra_fundos_result(
     }
 
 
+def fetch_fiinfra_premissas(ref_date: date, force_refresh: bool = False) -> dict:
+    """Lê taxa de administração e duration de divulgações das gestoras.
+
+    Só devolve um dado quando o documento informa uma data-base não futura.
+    Fontes indisponíveis não interrompem B3/CVM nem inventam uma premissa.
+    """
+    loaders = {
+        "IFRA11": ("Itaú Asset - carta mensal IFRA11", IFRA11_REPORT_URL, _parse_ifra11_report),
+        "KDIF11": ("Kinea - página do KDIF11", KDIF11_PAGE_URL, _parse_kdif11_page),
+        "JURO11": ("Sparta/B3 - relatório mensal JURO11", JURO11_REPORT_URL, _parse_juro11_report),
+    }
+    premissas, erros, tentadas = {}, {}, {}
+    for ticker, (fonte, url, parser) in loaders.items():
+        tentadas[ticker] = [fonte]
+        try:
+            raw = _download_binary(url, force_refresh=force_refresh)
+            item = parser(raw, fonte)
+            if item["data"] > ref_date:
+                raise ValueError(f"documento com data-base futura ({item['data']})")
+            premissas[ticker] = item
+        except Exception as exc:
+            erros[f"premissas_{ticker.lower()}"] = str(exc)
+    # O relatório oficial do BDIF11 é publicado em página protegida contra robôs;
+    # manter a ausência explícita é preferível a usar agregador ou dado não auditável.
+    tentadas["BDIF11"] = ["BTG Pactual - relatório mensal BDIF11 (preenchimento manual enquanto indisponível)"]
+    return {"premissas": premissas, "fontes_tentadas": tentadas, "erros": erros}
+
+
+def _parse_kdif11_page(raw: bytes, fonte: str) -> dict:
+    text = raw.decode("utf-8", errors="ignore")
+    duration = _match_number(text, r'id=["\']duration-fundo["\'][^>]*>\s*([0-9.,]+)')
+    taxa = _match_number(text, r'id=["\']txaAdm["\'][^>]*>\s*([0-9.,]+)')
+    data_base = _match_date(text, r"Data de refer[^:]{0,30}:\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})")
+    return _premissa_item(taxa, duration, data_base, fonte)
+
+
+def _parse_ifra11_report(raw: bytes, fonte: str) -> dict:
+    text = _pdf_text(raw)
+    taxa = _match_number(text, r"Taxa de Administra..o m.x.?:\s*([0-9.,]+)%")
+    duration = _match_number(
+        text,
+        r"Duration\s+dos t.tulos\s+privados\s+\(m.dia da carteira\)\s+([0-9.,]+)\s+anos",
+    )
+    data_base = _match_date(text, r"Informa..es sobre a carteira \(em\s*([0-9]{2}/[0-9]{2}/[0-9]{4})\)")
+    return _premissa_item(taxa, duration, data_base, fonte)
+
+
+def _parse_juro11_report(raw: bytes, fonte: str) -> dict:
+    text = _pdf_text(raw)
+    taxa = _match_number(text, r"Taxa de Administra..o:\s*([0-9.,]+)%")
+    # No resumo da Sparta, a duration vem imediatamente antes do PL em R$ bi.
+    # Ancorar no PL evita capturar o "5" do nome IMA-B 5.
+    duration = _match_number(text, r"([0-9]+[,.][0-9]+)\s*\n\s*R\$\s*[0-9]+[,.][0-9]+\s+[0-9.]+")
+    if duration is None:
+        duration = _match_number(text, r"duration aumentou para\s*([0-9.,]+)\s*anos")
+    data_base = _match_date(text, r"Dados de fechamento do dia\s*([0-9]{2}/[0-9]{2}/[0-9]{4})")
+    return _premissa_item(taxa, duration, data_base, fonte)
+
+
+def _pdf_text(raw: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise RuntimeError("pypdf não instalado; execute pip install -r requirements.txt") from exc
+    return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(raw)).pages)
+
+
+def _premissa_item(taxa, duration, data_base, fonte: str) -> dict:
+    if taxa is None or not 0 < taxa <= 5:
+        raise ValueError("taxa de administração ausente ou inválida")
+    if duration is None or not 0 < duration <= 30:
+        raise ValueError("duration ausente ou inválida")
+    if data_base is None:
+        raise ValueError("data-base ausente")
+    return {"taxa_total_aa": taxa, "duration": duration, "data": data_base, "fonte": fonte}
+
+
+def _match_number(text: str, pattern: str) -> Optional[float]:
+    match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    return _parse_decimal(match.group(1)) if match else None
+
+
+def _match_date(text: str, pattern: str) -> Optional[date]:
+    match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    value = match.group(1)
+    for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _download_zip(
+    url: str,
+    force_refresh: bool = False,
+    ttl_seconds: int = _CURRENT_DATA_TTL_SECONDS,
+) -> bytes:
+    return _download_binary(url, force_refresh=force_refresh, ttl_seconds=ttl_seconds)
+
+
+def _download_binary(
     url: str,
     force_refresh: bool = False,
     ttl_seconds: int = _CURRENT_DATA_TTL_SECONDS,

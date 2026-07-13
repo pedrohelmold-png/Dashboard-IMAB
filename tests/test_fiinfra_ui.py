@@ -297,6 +297,21 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertTrue((base["taxa_total_status"] == "PENDENTE_PREMISSA").all())
         self.assertTrue((base["duration_status"] == "PENDENTE_PREMISSA").all())
 
+    def test_premissas_oficiais_da_coleta_substituem_fallback_manual(self):
+        ref = date(2026, 7, 10)
+        dados = _fundos(ref)
+        dados[0].update({
+            "taxa_total_aa": 0.85, "duration": 5.29,
+            "taxa_total_status": "DENTRO_SLA", "duration_status": "DENTRO_SLA",
+            "taxa_total_fonte": "Itaú Asset", "duration_fonte": "Itaú Asset",
+        })
+        base = _fundos_base(dados)
+        ifra = base.loc[base["ticker"] == "IFRA11"].iloc[0]
+
+        self.assertAlmostEqual(ifra["taxa_total_aa"], 0.85)
+        self.assertAlmostEqual(ifra["duration"], 5.29)
+        self.assertEqual(ifra["taxa_total_status"], "DENTRO_SLA")
+
     def test_identifica_fundos_com_premissas_manuais_pendentes(self):
         fundos = pd.DataFrame([
             {"ticker": "IFRA11", "taxa_total_aa": 0.55, "duration": 8.0},

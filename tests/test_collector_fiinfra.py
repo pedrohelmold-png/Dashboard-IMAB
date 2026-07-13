@@ -11,6 +11,7 @@ from src.collector import (
     fetch_cotacoes_b3,
     fetch_fiinfra_macro,
     fetch_fiinfra_fundos_result,
+    fetch_fiinfra_premissas,
     fetch_ipca_focus_info,
     selecionar_ntnb_referencia,
     _download_zip,
@@ -188,14 +189,42 @@ class CollectorFiInfraTests(unittest.TestCase):
         cvm.return_value = {
             "IFRA11": {"valor": 95.0, "data": date(2026, 7, 9), "fonte": "CVM"}
         }
-        result = fetch_fiinfra_fundos_result(
-            date(2026, 7, 10), fundos={"IFRA11": FIINFRA_FUNDOS["IFRA11"]}
-        )
+        with patch("src.collector.fetch_fiinfra_premissas", return_value={
+            "premissas": {}, "fontes_tentadas": {}, "erros": {},
+        }):
+            result = fetch_fiinfra_fundos_result(
+                date(2026, 7, 10), fundos={"IFRA11": FIINFRA_FUNDOS["IFRA11"]}
+            )
         self.assertIn("b3", result["erros"])
         self.assertIn("B3 COTAHIST 2026", result["fontes_tentadas"]["b3"])
         self.assertIn("CVM Informe Diario 2026-07", result["fontes_tentadas"]["cvm"])
         self.assertIsNone(result["fundos"][0]["cota_mercado"])
         self.assertEqual(result["fundos"][0]["cota_patrimonial"], 95.0)
+
+    @patch("src.collector._download_binary")
+    def test_premissas_oficiais_sao_extraidas_com_data_base(self, download):
+        ifra = (
+            "Informações sobre a carteira (em 30/06/2026) "
+            "Duration dos títulos privados (média da carteira) 5,29 anos "
+            "Taxa de Administração máx.: 0,85% a.a."
+        ).encode()
+        kdif = (
+            'Data de referência: 10/07/26 '
+            '<span id="duration-fundo">4,396212</span>'
+            '<span id="txaAdm">1.11</span>'
+        ).encode()
+        juro = (
+            "Dados de fechamento do dia 30/01/2026 Taxa de Administração: 1,0% "
+            "4,7\n R$ 2,1 91.994"
+        ).encode()
+        download.side_effect = [ifra, kdif, juro]
+        with patch("src.collector._pdf_text", side_effect=[ifra.decode(), juro.decode()]):
+            result = fetch_fiinfra_premissas(date(2026, 7, 13))
+
+        self.assertEqual(result["premissas"]["IFRA11"]["data"], date(2026, 6, 30))
+        self.assertAlmostEqual(result["premissas"]["KDIF11"]["duration"], 4.396212)
+        self.assertAlmostEqual(result["premissas"]["JURO11"]["duration"], 4.7)
+        self.assertIn("BDIF11", result["fontes_tentadas"])
 
 
 if __name__ == "__main__":

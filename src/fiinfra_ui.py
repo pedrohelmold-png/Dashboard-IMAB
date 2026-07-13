@@ -279,9 +279,9 @@ def render_regua_fiinfra() -> None:
             + ". Use o bloco em lote ou edite a tabela abaixo."
         )
     else:
-        st.success("🟢 Premissas de taxa e duration completas. Revise os valores antes de salvar o snapshot.")
+        st.success("🟢 Premissas de taxa e duration completas. Revise fontes e valores antes de salvar o snapshot.")
     fundos_base = _render_premissas_lote(fundos_base, collection_id)
-    st.caption("🟠 As colunas com este ícone são premissas manuais. Cotações e datas são alimentadas pela coleta.")
+    st.caption("Taxa e duration são buscadas nas divulgações das gestoras. 🟠 Preencha manualmente apenas os fundos que continuarem pendentes.")
     fundos_editados = st.data_editor(
         fundos_base,
         hide_index=True,
@@ -291,8 +291,10 @@ def render_regua_fiinfra() -> None:
             "ticker": st.column_config.TextColumn("Ticker", disabled=True),
             "cota_mercado": st.column_config.NumberColumn("Cota mercado", format="%.2f"),
             "cota_patrimonial": st.column_config.NumberColumn("Cota patrimonial", format="%.2f"),
-            "taxa_total_aa": st.column_config.NumberColumn("🟠 Taxa total (% a.a.)", format="%.2f"),
-            "duration": st.column_config.NumberColumn("🟠 Duration", format="%.2f"),
+            "taxa_total_aa": st.column_config.NumberColumn("Taxa total (% a.a.)", format="%.2f"),
+            "duration": st.column_config.NumberColumn("Duration", format="%.2f"),
+            "taxa_total_fonte": st.column_config.TextColumn("Fonte taxa", disabled=True),
+            "duration_fonte": st.column_config.TextColumn("Fonte duration", disabled=True),
             "mercado_data": st.column_config.DateColumn("Data mercado", disabled=True),
             "patrimonial_data": st.column_config.DateColumn("Data patrimonial", disabled=True),
             "mercado_status": st.column_config.TextColumn("Status mercado", disabled=True),
@@ -670,7 +672,7 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
 
 def _render_premissas_lote(fundos_base: pd.DataFrame, collection_id: str) -> pd.DataFrame:
     pendentes = _fundos_com_premissas_pendentes(fundos_base)
-    with st.expander("🟠 Premissas manuais: taxa e duration em lote", expanded=bool(pendentes)):
+    with st.expander("🟠 Completar premissas pendentes em lote", expanded=bool(pendentes)):
         st.caption(
             "Ação necessária para fundos pendentes: cole CSV com ticker, taxa_total_aa e duration. "
             "Separador vírgula ou ponto-e-vírgula; aceita decimal com vírgula."
@@ -1254,7 +1256,8 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None, premissas: Optional[di
         "cota_mercado_data", "cota_mercado_fonte", "cota_mercado_status",
         "cota_patrimonial", "cota_patrimonial_original", "cota_patrimonial_data",
         "cota_patrimonial_fonte", "cota_patrimonial_status", "taxa_total_aa",
-        "taxa_total_status", "duration", "duration_status",
+        "taxa_total_status", "taxa_total_fonte", "duration", "duration_status",
+        "duration_fonte",
     ]
     if dados_auto:
         anteriores = latest.set_index("ticker").to_dict("index") if not latest.empty else {}
@@ -1264,8 +1267,12 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None, premissas: Optional[di
             ticker = fundo["ticker"]
             anterior = anteriores.get(ticker, {})
             premissa = valores_premissas.get(ticker, {})
-            taxa_total = _prior_or_default(anterior, "taxa_total_aa", premissa.get("taxa_total_aa"))
-            duration = _prior_or_default(anterior, "duration", premissa.get("duration"))
+            taxa_total = _auto_or_prior(
+                fundo.get("taxa_total_aa"), anterior, "taxa_total_aa", premissa.get("taxa_total_aa")
+            )
+            duration = _auto_or_prior(
+                fundo.get("duration"), anterior, "duration", premissa.get("duration")
+            )
             rows.append({
                 "ticker": ticker,
                 "cnpj": fundo.get("cnpj"),
@@ -1277,10 +1284,12 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None, premissas: Optional[di
                 "cota_patrimonial_fonte": fundo.get("cota_patrimonial_fonte"),
                 "taxa_total_aa": taxa_total,
                 "duration": duration,
-                "taxa_total_status": anterior.get("taxa_total_status") or (
+                "taxa_total_fonte": fundo.get("taxa_total_fonte"),
+                "duration_fonte": fundo.get("duration_fonte"),
+                "taxa_total_status": fundo.get("taxa_total_status") if fundo.get("taxa_total_aa") is not None else anterior.get("taxa_total_status") or (
                     "CONJUNTO_PREMISSA" if premissa.get("taxa_total_aa") is not None else "PENDENTE_PREMISSA"
                 ),
-                "duration_status": anterior.get("duration_status") or (
+                "duration_status": fundo.get("duration_status") if fundo.get("duration") is not None else anterior.get("duration_status") or (
                     "CONJUNTO_PREMISSA" if premissa.get("duration") is not None else "PENDENTE_PREMISSA"
                 ),
                 "mercado_data": fundo.get("cota_mercado_data"),
@@ -1465,6 +1474,12 @@ def _prior_or_default(
     if value is None or pd.isna(value):
         return None if fallback is None else float(fallback)
     return float(value)
+
+
+def _auto_or_prior(value, row: dict, key: str, fallback: Optional[float]) -> Optional[float]:
+    if value is not None and not pd.isna(value):
+        return float(value)
+    return _prior_or_default(row, key, fallback)
 
 
 def _spread_provenance(ultimo_snapshot: Optional[dict], effective: float) -> dict:
