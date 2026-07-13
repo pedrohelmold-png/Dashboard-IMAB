@@ -9,6 +9,7 @@ from src.db import (
     init_db_fiinfra,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    load_fiinfra_market_observations,
     load_fiinfra_revisions,
     load_fiinfra_schema_meta,
     load_fiinfra_snapshots,
@@ -16,6 +17,7 @@ from src.db import (
     load_fiinfra_tranches,
     restore_fiinfra_revision,
     save_fiinfra_thresholds,
+    save_fiinfra_collection_observation,
     upsert_fiinfra_snapshot,
 )
 
@@ -93,6 +95,32 @@ class DbFiInfraTests(unittest.TestCase):
                                     "qtd": 10, "preco": 95, "observacao": "teste"}, self.db_path)
         tranches = load_fiinfra_tranches(db_path=self.db_path)
         self.assertEqual(tranches.iloc[0]["ticker"], "BDIF11")
+
+    def test_coleta_bruta_e_guardada_sem_snapshot_decisorio(self):
+        ref = date.today()
+        collection = {
+            "collection_id": "coleta-teste",
+            "data_solicitada": ref,
+            "coletado_em": "2026-07-13T17:10:00",
+            "macro": {"ntnb": 7.2, "cdi": 14.1},
+            "fontes_tentadas": {"b3": ["B3 COTAHIST 2026"]},
+            "erros": [],
+            "fundos": [{
+                "ticker": "IFRA11", "cnpj": "34.633.510/0001-18",
+                "cota_mercado": 94.2, "cota_mercado_data": ref,
+                "cota_mercado_fonte": "B3", "cota_mercado_status": "DENTRO_SLA",
+                "cota_patrimonial": 98.1, "cota_patrimonial_data": ref,
+                "cota_patrimonial_fonte": "CVM", "cota_patrimonial_status": "DENTRO_SLA",
+            }],
+        }
+
+        save_fiinfra_collection_observation(collection, self.db_path)
+        observacoes = load_fiinfra_market_observations(days=99999, db_path=self.db_path)
+
+        self.assertEqual(len(observacoes), 1)
+        self.assertEqual(observacoes.iloc[0]["ticker"], "IFRA11")
+        self.assertAlmostEqual(observacoes.iloc[0]["cota_mercado"], 94.2)
+        self.assertEqual(len(load_fiinfra_snapshots(db_path=self.db_path)), 0)
 
     @staticmethod
     def _fundo(ticker):

@@ -10,12 +10,20 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+`app.py` e o unico ponto de entrada. Selecione **IMA-B 5**, **IMA-B** ou
+**Regua FI-Infra** no menu lateral.
+
 O menu **Tela** alterna entre o dashboard de carrego e a Regua FI-Infra. Na
 regua, o botao **Atualizar dados oficiais** busca NTN-B e dados macro via
 ANBIMA/BCB, fechamentos dos fundos na B3 e cotas patrimoniais no Informe
 Diario da CVM. Confira os tres sinais e salve o snapshot semanal. Limiares,
 snapshots e tranches ficam no SQLite configurado em
 `config.py`.
+
+O contrato de decisao e os limites metodologicos da regua estao em
+[`docs/DECISION_CONTRACT.md`](docs/DECISION_CONTRACT.md). A zona se refere a
+exposicao agregada da classe FI-Infra; ela nao escolhe automaticamente um
+ticker.
 
 Nos dashboards de carrego, o **IPCA Focus 12m** e comum ao IMA-B 5 e ao IMA-B
 na mesma data e e a premissa principal do carrego nominal. A **inflacao
@@ -48,6 +56,11 @@ publicado: B3 pode recorrer ao COTAHIST do ano anterior, e CVM pode recorrer ao
 Informe Diario do mes anterior. A recomendacao operacional exige ao menos tres
 dos quatro fundos com dados completos.
 
+Toda coleta tambem e guardada como observacao bruta, mesmo sem salvar um
+snapshot de decisao. O comando `python fiinfra_etl.py` executa essa coleta sem
+aplicar premissas manuais ou emitir recomendacao; ele e acionado no workflow
+diario junto com IMA-B 5 e IMA-B.
+
 O snapshot da Regua FI-Infra guarda a proveniencia dos principais campos: lote
 de coleta, data solicitada, fontes macro, valor original coletado, status de
 SLA e indicacao de override manual. Os limiares usados na classificacao tambem
@@ -74,7 +87,7 @@ ajuda a explicar recuos para ano ou mes anterior em viradas de calendario.
 O SQLite tambem registra metadados de schema da regua (`schema_name` e
 `schema_version`), facilitando diagnostico quando um banco antigo for reaberto.
 
-O spread IDA-Infra, a taxa total e a duration de cada fundo continuam
+O spread de credito, a taxa total e a duration de cada fundo continuam
 editaveis: essas informacoes ainda nao possuem, no fluxo atual, uma fonte
 estruturada com cobertura e periodicidade uniformes. O spread fica auditado no
 snapshot com fonte, status, valor original e override, e aparece no painel de
@@ -87,6 +100,11 @@ fica gravado como manual confirmado.
 
 As taxas e descontos usam pontos percentuais (por exemplo, `6.5` para 6,5%), o
 spread usa pontos-base e a aliquota e armazenada em decimal.
+
+Taxa e duration deixam de receber valores numericos iniciais implicitos quando
+nao existe historico. Nessa situacao, a regua exige premissas explicitas antes
+de liberar uma decisao operacional. O score de desconto e uma heuristica de
+pesquisa, nao um calculo de valor justo ou yield contratual do fundo.
 
 ## Testes
 

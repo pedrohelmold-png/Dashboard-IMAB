@@ -12,6 +12,7 @@ from src.fiinfra_ui import (
     _apply_premissas_lote,
     _collection_error_messages,
     _confirmar_estimativas_fundos,
+    _fundos_base,
     _historical_threshold,
     _json_list_summary,
     _macro_quality_rows,
@@ -55,7 +56,7 @@ class FiInfraUiTests(unittest.TestCase):
         result = {"fundos": _fundos(ref), "erros": {}, "data_solicitada": ref}
         with patch("src.fiinfra_ui.fetch_fiinfra_macro", return_value=_macro(ref)), patch(
             "src.fiinfra_ui.fetch_fiinfra_fundos_result", return_value=result
-        ):
+        ), patch("src.fiinfra_ui.save_fiinfra_collection_observation"):
             at = AppTest.from_file("app.py", default_timeout=30).run()
             at.radio[0].set_value("Regua FI-Infra").run()
             [b for b in at.button if b.label == "Atualizar dados oficiais"][0].click().run()
@@ -76,7 +77,7 @@ class FiInfraUiTests(unittest.TestCase):
         result = {"fundos": _fundos(ref), "erros": {}, "data_solicitada": ref}
         with patch("src.fiinfra_ui.fetch_fiinfra_macro", return_value=_macro(ref)), patch(
             "src.fiinfra_ui.fetch_fiinfra_fundos_result", return_value=result
-        ):
+        ), patch("src.fiinfra_ui.save_fiinfra_collection_observation"):
             at = AppTest.from_file("app.py", default_timeout=30).run()
             at.radio[0].set_value("Regua FI-Infra").run()
             [b for b in at.button if b.label == "Atualizar dados oficiais"][0].click().run()
@@ -87,6 +88,20 @@ class FiInfraUiTests(unittest.TestCase):
             at.run()
             self.assertFalse(at.exception)
             self.assertTrue(any("juro real" in item.value for item in at.error))
+
+    def test_coleta_sem_premissas_nao_libera_snapshot(self):
+        ref = date.today()
+        result = {"fundos": _fundos(ref), "erros": {}, "data_solicitada": ref}
+        with patch("src.fiinfra_ui.fetch_fiinfra_macro", return_value=_macro(ref)), patch(
+            "src.fiinfra_ui.fetch_fiinfra_fundos_result", return_value=result
+        ), patch("src.fiinfra_ui.save_fiinfra_collection_observation"):
+            at = AppTest.from_file("app.py", default_timeout=30).run()
+            at.radio[0].set_value("Regua FI-Infra").run()
+            [b for b in at.button if b.label == "Atualizar dados oficiais"][0].click().run()
+
+            self.assertFalse(at.exception)
+            self.assertTrue(any("Cobertura insuficiente" in item.value for item in at.warning))
+            self.assertFalse(any(b.label == "Salvar snapshot semanal" for b in at.button))
 
     def test_snapshot_payload_guarda_metodologia_limiares_e_overrides(self):
         ref = date(2026, 7, 10)
@@ -272,6 +287,14 @@ class FiInfraUiTests(unittest.TestCase):
         self.assertAlmostEqual(atualizados.loc[0, "taxa_total_aa"], 1.0)
         self.assertTrue(any("Ticker ignorado" in mensagem for mensagem in mensagens))
         self.assertTrue(any("Taxa invalida" in mensagem for mensagem in mensagens))
+
+    def test_fundos_sem_historico_exigem_premissas_explicitas(self):
+        base = _fundos_base([])
+
+        self.assertTrue(base["taxa_total_aa"].isna().all())
+        self.assertTrue(base["duration"].isna().all())
+        self.assertTrue((base["taxa_total_status"] == "PENDENTE_PREMISSA").all())
+        self.assertTrue((base["duration_status"] == "PENDENTE_PREMISSA").all())
 
     def test_historico_usa_limiares_congelados_com_fallback(self):
         hist = pd.DataFrame({

@@ -20,6 +20,7 @@ from src.db import (
     get_ultimo_fiinfra_snapshot,
     insert_fiinfra_tranche,
     load_fiinfra_fundos,
+    save_fiinfra_collection_observation,
     load_fiinfra_revisions,
     load_fiinfra_snapshots,
     load_fiinfra_thresholds,
@@ -72,7 +73,10 @@ def render_regua_fiinfra() -> None:
         ultimo_imab = get_ultimo_carrego(table="carrego_historico")
 
     st.title("Regua de Ciclo FI-Infra")
-    st.caption("FI-Infra listados: juro real, spread de credito e excesso de desconto.")
+    st.caption(
+        "Sinal tatico para a classe FI-Infra: juro real, spread de credito e "
+        "score de desconto relativo. Nao seleciona ticker automaticamente."
+    )
 
     thresholds = _render_threshold_editor(thresholds)
 
@@ -114,6 +118,10 @@ def render_regua_fiinfra() -> None:
             batch["erros"].extend(
                 f"{fonte}: {erro}" for fonte, erro in fundos_result["erros"].items()
             )
+            try:
+                save_fiinfra_collection_observation(batch)
+            except Exception as exc:
+                batch["erros"].append(f"historico: {exc}")
             st.session_state["fiinfra_collection"] = batch
             collection = batch
 
@@ -139,11 +147,14 @@ def render_regua_fiinfra() -> None:
         )
     with input_cols[1]:
         spread = st.number_input(
-            "Spread IDA-Infra (bps)",
+            "Spread de credito (bps)",
             value=_fallback_float(ultimo_snapshot, "spread", 100.0),
             step=5.0,
             format="%.0f",
-            help="Mantido manual ate haver serie ANBIMA estruturada e estavel.",
+            help=(
+                "Premissa manual ate haver uma serie estruturada e estavel. "
+                "Confirme fonte e data-base antes de salvar o snapshot."
+            ),
             key=f"fiinfra_spread_{collection_id}",
         )
     with input_cols[2]:
@@ -323,7 +334,11 @@ def render_regua_fiinfra() -> None:
         alternativa_liquida_real,
     )
 
-    _render_zona(avaliacao, execucao)
+    _render_zona(
+        avaliacao,
+        execucao,
+        _decision_confidence(qualidade, cobertura, len(fundos_calc)),
+    )
     _render_signal_grid(
         ntnb,
         spread,
@@ -425,7 +440,7 @@ def _render_threshold_editor(thresholds: dict) -> dict:
     return thresholds
 
 
-def _render_zona(avaliacao: dict, execucao: dict) -> None:
+def _render_zona(avaliacao: dict, execucao: dict, confidence: str) -> None:
     zona = avaliacao["zona"]
     text_color, bg_color, border_color = _ZONA_STYLE[zona]
     st.markdown(
@@ -438,7 +453,7 @@ def _render_zona(avaliacao: dict, execucao: dict) -> None:
             padding: 18px 22px;
             margin: 12px 0 18px 0;">
             <div style="font-size: 0.78rem; text-transform: uppercase; letter-spacing: .08em;">
-                Zona atual
+                Decisao da semana · confianca {confidence}
             </div>
             <div style="font-size: 2.2rem; font-weight: 800; line-height: 1.1; margin-top: 4px;">
                 {zona}
@@ -466,7 +481,7 @@ def _render_signal_grid(
     values = [
         ("Juro real", f"IPCA+{ntnb:.2f}%", posicoes["juro_real"], estados["juro_real"]),
         ("Spread", f"{spread:.0f} bps", posicoes["spread"], estados["spread"]),
-        ("Excesso desconto", f"{excesso_mediano:.2f} p.p.", posicoes["excesso_desconto"], estados["excesso_desconto"]),
+        ("Score desconto relativo", f"{excesso_mediano:.2f} p.p.", posicoes["excesso_desconto"], estados["excesso_desconto"]),
     ]
 
     cols = st.columns(3)
@@ -481,12 +496,15 @@ def _render_signal_grid(
 
     carry_cols = st.columns(3)
     carry_cols[0].metric("Duration mediana", _fmt(duration_mediana, " anos"))
-    carry_cols[1].metric("Yield fundo real", _fmt(yield_fundo_real, "% a.a."))
+    carry_cols[1].metric("Carry real indicativo", _fmt(yield_fundo_real, "% a.a."))
     carry_cols[2].metric("Alternativa real", _fmt(alternativa_liquida_real, "% a.a."))
 
 
 def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
-    st.subheader("Desconto ajustado por fundo")
+    st.subheader("Score de desconto relativo por fundo")
+    st.caption(
+        "Heuristica de pesquisa; nao representa valor justo, yield contratado ou recomendacao individual."
+    )
     display = fundos_df.copy()
     st.dataframe(
         display,
@@ -499,8 +517,8 @@ def _render_fundos_calculados(fundos_df: pd.DataFrame) -> None:
             "taxa_total_aa": st.column_config.NumberColumn("Taxa total", format="%.2f%%"),
             "duration": st.column_config.NumberColumn("Duration", format="%.2f"),
             "desconto_observado": st.column_config.NumberColumn("Desconto observado", format="%.2f p.p."),
-            "desconto_justo": st.column_config.NumberColumn("Desconto justo", format="%.2f p.p."),
-            "excesso_desconto": st.column_config.NumberColumn("Excesso", format="%.2f p.p."),
+            "desconto_justo": st.column_config.NumberColumn("Referencia heuristica", format="%.2f p.p."),
+            "excesso_desconto": st.column_config.NumberColumn("Score relativo", format="%.2f p.p."),
             "elegivel": st.column_config.CheckboxColumn("Elegível"),
             "motivo_exclusao": st.column_config.TextColumn("Motivo exclusão"),
             "cota_mercado_override": st.column_config.CheckboxColumn("Override mercado"),
@@ -688,6 +706,11 @@ def _quality_summary(
         or row.get("duration_status") == "ESTIMATIVA_NAO_CONFIRMADA"
         for row in fundos_calc
     )
+    pendentes = sum(
+        row.get("taxa_total_status") == "PENDENTE_PREMISSA"
+        or row.get("duration_status") == "PENDENTE_PREMISSA"
+        for row in fundos_calc
+    )
     issues = []
     if not collection:
         issues.append("snapshot sem lote de coleta oficial para a data")
@@ -699,6 +722,8 @@ def _quality_summary(
         issues.append("spread IDA-Infra sem coleta oficial automatizada")
     if estimativas:
         issues.append(f"{estimativas} fundo(s) usam taxa/duration estimadas")
+    if pendentes:
+        issues.append(f"{pendentes} fundo(s) sem taxa/duration informadas")
     if existing_snapshot:
         issues.append(
             f"ja existe snapshot nesta data; a versao atual sera arquivada "
@@ -711,8 +736,22 @@ def _quality_summary(
         "fund_overrides": fund_overrides,
         "total_overrides": total_overrides,
         "estimativas": estimativas,
+        "pendentes": pendentes,
         "status_counts": _status_counts(auto_macro, fundos_calc),
     }
+
+
+def _decision_confidence(qualidade: dict, cobertura: int, total_fundos: int) -> str:
+    """Resume a confianca do sinal sem esconder os detalhes de auditoria."""
+    if cobertura < 3:
+        return "BLOQUEADA"
+    if qualidade.get("pendentes"):
+        return "BLOQUEADA"
+    if qualidade.get("issues"):
+        return "CONDICIONADA"
+    if cobertura < total_fundos:
+        return "MODERADA"
+    return "ALTA"
 
 
 def _macro_quality_rows(
@@ -1064,6 +1103,8 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
         for fundo in dados_auto:
             ticker = fundo["ticker"]
             anterior = anteriores.get(ticker, {})
+            taxa_total = _prior_or_default(anterior, "taxa_total_aa", None)
+            duration = _prior_or_default(anterior, "duration", None)
             rows.append({
                 "ticker": ticker,
                 "cnpj": fundo.get("cnpj"),
@@ -1073,13 +1114,13 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
                 "cota_patrimonial_original": fundo.get("cota_patrimonial"),
                 "cota_mercado_fonte": fundo.get("cota_mercado_fonte"),
                 "cota_patrimonial_fonte": fundo.get("cota_patrimonial_fonte"),
-                "taxa_total_aa": _prior_or_default(anterior, "taxa_total_aa", 1.0),
-                "duration": _prior_or_default(anterior, "duration", 8.0),
+                "taxa_total_aa": taxa_total,
+                "duration": duration,
                 "taxa_total_status": anterior.get("taxa_total_status") or (
-                    "HISTORICO" if anterior else "ESTIMATIVA_NAO_CONFIRMADA"
+                    "HISTORICO" if taxa_total is not None else "PENDENTE_PREMISSA"
                 ),
                 "duration_status": anterior.get("duration_status") or (
-                    "HISTORICO" if anterior else "ESTIMATIVA_NAO_CONFIRMADA"
+                    "HISTORICO" if duration is not None else "PENDENTE_PREMISSA"
                 ),
                 "mercado_data": fundo.get("cota_mercado_data"),
                 "patrimonial_data": fundo.get("cota_patrimonial_data"),
@@ -1104,10 +1145,10 @@ def _fundos_base(dados_auto: Optional[list[dict]] = None) -> pd.DataFrame:
             "cota_mercado_original": None,
             "cota_patrimonial": None,
             "cota_patrimonial_original": None,
-            "taxa_total_aa": 1.0,
-            "taxa_total_status": "ESTIMATIVA_NAO_CONFIRMADA",
-            "duration": 8.0,
-            "duration_status": "ESTIMATIVA_NAO_CONFIRMADA",
+            "taxa_total_aa": None,
+            "taxa_total_status": "PENDENTE_PREMISSA",
+            "duration": None,
+            "duration_status": "PENDENTE_PREMISSA",
         }
         for ticker in FUNDOS_PADRAO
     ])
@@ -1256,10 +1297,12 @@ def _auto_or_fallback(
     return _fallback_float(row, row_key, fallback)
 
 
-def _prior_or_default(row: dict, key: str, fallback: float) -> float:
+def _prior_or_default(
+    row: dict, key: str, fallback: Optional[float]
+) -> Optional[float]:
     value = row.get(key)
     if value is None or pd.isna(value):
-        return float(fallback)
+        return None if fallback is None else float(fallback)
     return float(value)
 
 

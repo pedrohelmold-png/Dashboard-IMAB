@@ -26,7 +26,7 @@ from config import DB_PATH
 from src.regua_fiinfra import DEFAULT_THRESHOLDS, validar_thresholds
 
 logger = logging.getLogger(__name__)
-FIINFRA_SCHEMA_VERSION = "2026-07-10.2"
+FIINFRA_SCHEMA_VERSION = "2026-07-13.1"
 
 # ── Schema DDL — IMA-B 5 (tabelas originais) ───────────────────
 _SCHEMA = """
@@ -231,10 +231,38 @@ CREATE TABLE IF NOT EXISTS fiinfra_snapshot_revisions (
     substituido_em TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS fiinfra_collection_observations (
+    collection_id    TEXT PRIMARY KEY,
+    data_solicitada  TEXT NOT NULL,
+    coletado_em      TEXT NOT NULL,
+    macro_json       TEXT NOT NULL,
+    fontes_json      TEXT,
+    erros_json       TEXT,
+    criado_em        TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fiinfra_market_observations (
+    collection_id             TEXT NOT NULL,
+    data_solicitada           TEXT NOT NULL,
+    ticker                    TEXT NOT NULL,
+    cnpj                      TEXT,
+    cota_mercado              REAL,
+    cota_mercado_data         TEXT,
+    cota_mercado_fonte        TEXT,
+    cota_mercado_status       TEXT,
+    cota_patrimonial          REAL,
+    cota_patrimonial_data     TEXT,
+    cota_patrimonial_fonte    TEXT,
+    cota_patrimonial_status   TEXT,
+    PRIMARY KEY (collection_id, ticker)
+);
+
 CREATE INDEX IF NOT EXISTS idx_fiinfra_snapshots_data ON fiinfra_snapshots(data);
 CREATE INDEX IF NOT EXISTS idx_fiinfra_fundos_data ON fiinfra_fundos_snapshot(data);
 CREATE INDEX IF NOT EXISTS idx_fiinfra_tranches_data ON fiinfra_tranches(data);
 CREATE INDEX IF NOT EXISTS idx_fiinfra_revisions_data ON fiinfra_snapshot_revisions(data);
+CREATE INDEX IF NOT EXISTS idx_fiinfra_collections_data ON fiinfra_collection_observations(data_solicitada);
+CREATE INDEX IF NOT EXISTS idx_fiinfra_market_data ON fiinfra_market_observations(data_solicitada, ticker);
 """
 
 
@@ -518,6 +546,76 @@ def upsert_fiinfra_snapshot(
             """, fundo_row)
 
 
+def save_fiinfra_collection_observation(collection: dict, db_path=None) -> None:
+    """Persiste uma coleta bruta, mesmo sem snapshot decisorio salvo.
+
+    A coleta e imutavel por ``collection_id`` e preserva macro, fontes, erros
+    e cotas antes que premissas manuais sejam aplicadas na interface.
+    """
+    collection_id = str(collection.get("collection_id") or "").strip()
+    ref_date = collection.get("data_solicitada")
+    collected_at = collection.get("coletado_em")
+    if not collection_id or ref_date is None or not collected_at:
+        raise ValueError("Coleta FI-Infra exige collection_id, data_solicitada e coletado_em.")
+
+    row = {
+        "collection_id": collection_id,
+        "data_solicitada": str(ref_date),
+        "coletado_em": str(collected_at),
+        "macro_json": json.dumps(collection.get("macro") or {}, default=str),
+        "fontes_json": json.dumps(collection.get("fontes_tentadas") or {}, default=str),
+        "erros_json": json.dumps(collection.get("erros") or [], default=str),
+    }
+    fundos = collection.get("fundos") or []
+
+    with _conn(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO fiinfra_collection_observations
+              (collection_id, data_solicitada, coletado_em, macro_json, fontes_json, erros_json)
+            VALUES
+              (:collection_id, :data_solicitada, :coletado_em, :macro_json, :fontes_json, :erros_json)
+            """,
+            row,
+        )
+        conn.execute(
+            "DELETE FROM fiinfra_market_observations WHERE collection_id = ?",
+            (collection_id,),
+        )
+        for fundo in fundos:
+            fundo_row = {
+                "collection_id": collection_id,
+                "data_solicitada": str(ref_date),
+                "ticker": str(fundo.get("ticker") or "").upper().strip(),
+                "cnpj": fundo.get("cnpj"),
+                "cota_mercado": fundo.get("cota_mercado"),
+                "cota_mercado_data": _as_text(fundo.get("cota_mercado_data")),
+                "cota_mercado_fonte": fundo.get("cota_mercado_fonte"),
+                "cota_mercado_status": fundo.get("cota_mercado_status"),
+                "cota_patrimonial": fundo.get("cota_patrimonial"),
+                "cota_patrimonial_data": _as_text(fundo.get("cota_patrimonial_data")),
+                "cota_patrimonial_fonte": fundo.get("cota_patrimonial_fonte"),
+                "cota_patrimonial_status": fundo.get("cota_patrimonial_status"),
+            }
+            if not fundo_row["ticker"]:
+                continue
+            conn.execute(
+                """
+                INSERT INTO fiinfra_market_observations
+                  (collection_id, data_solicitada, ticker, cnpj,
+                   cota_mercado, cota_mercado_data, cota_mercado_fonte, cota_mercado_status,
+                   cota_patrimonial, cota_patrimonial_data, cota_patrimonial_fonte,
+                   cota_patrimonial_status)
+                VALUES
+                  (:collection_id, :data_solicitada, :ticker, :cnpj,
+                   :cota_mercado, :cota_mercado_data, :cota_mercado_fonte, :cota_mercado_status,
+                   :cota_patrimonial, :cota_patrimonial_data, :cota_patrimonial_fonte,
+                   :cota_patrimonial_status)
+                """,
+                fundo_row,
+            )
+
+
 def insert_fiinfra_tranche(tranche: dict, db_path=None) -> None:
     """Registra uma tranche executada ou planejada."""
     row = {**tranche, "data": str(tranche["data"])}
@@ -731,6 +829,25 @@ def load_fiinfra_fundos(ref_date: Optional[date] = None, db_path=None) -> pd.Dat
     return df
 
 
+def load_fiinfra_market_observations(days: int = 365, db_path=None) -> pd.DataFrame:
+    """Carrega cotas brutas das coletas, da mais recente para a mais antiga."""
+    with _conn(db_path) as conn:
+        df = pd.read_sql(
+            """
+            SELECT market.*, collection.coletado_em
+            FROM fiinfra_market_observations AS market
+            JOIN fiinfra_collection_observations AS collection
+              ON collection.collection_id = market.collection_id
+            WHERE market.data_solicitada >= date('now', ?)
+            ORDER BY market.data_solicitada DESC, collection.coletado_em DESC, market.ticker
+            """,
+            conn,
+            params=(f"-{int(days)} days",),
+            parse_dates=["data_solicitada", "cota_mercado_data", "cota_patrimonial_data"],
+        )
+    return df
+
+
 def load_fiinfra_tranches(limit: int = 100, db_path=None) -> pd.DataFrame:
     """Carrega as tranches mais recentes."""
     with _conn(db_path) as conn:
@@ -814,6 +931,10 @@ def _mark_fiinfra_schema_version(conn: sqlite3.Connection) -> None:
             """,
             (chave, valor),
         )
+
+
+def _as_text(value) -> Optional[str]:
+    return None if value is None else str(value)
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:

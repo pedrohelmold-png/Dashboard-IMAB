@@ -1,4 +1,4 @@
-name: Daily IMA-B 5 Update
+name: Daily market data update
 
 on:
   schedule:
@@ -46,10 +46,13 @@ jobs:
           if [ "${{ inputs.backfill }}" = "true" ] || [ "${{ steps.db-cache.outputs.cache-hit }}" != "true" ]; then
             echo "Rodando backfill..."
             python etl.py --backfill
+            python etl.py --backfill --index imab
           else
             echo "Rodando atualização diária..."
             python etl.py
+            python etl.py --index imab
           fi
+          python fiinfra_etl.py
 
       # Opcional: fazer commit do DB para o branch (descomente se quiser versionar)
       # - name: Commit banco atualizado
