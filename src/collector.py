@@ -36,7 +36,6 @@ _FOCUS_TTL_SECONDS = 60 * 60
 
 FIINFRA_FUNDOS = {
     "IFRA11": "34.633.510/0001-18",
-    "BDIF11": "40.502.607/0001-94",
     "KDIF11": "26.324.298/0001-89",
     "JURO11": "42.730.834/0001-00",
 }
@@ -566,9 +565,6 @@ def fetch_fiinfra_premissas(ref_date: date, force_refresh: bool = False) -> dict
             premissas[ticker] = item
         except Exception as exc:
             erros[f"premissas_{ticker.lower()}"] = str(exc)
-    # O relatório oficial do BDIF11 é publicado em página protegida contra robôs;
-    # manter a ausência explícita é preferível a usar agregador ou dado não auditável.
-    tentadas["BDIF11"] = ["BTG Pactual - relatório mensal BDIF11 (preenchimento manual enquanto indisponível)"]
     return {"premissas": premissas, "fontes_tentadas": tentadas, "erros": erros}
 
 

@@ -529,13 +529,15 @@ def _render_observation_health() -> None:
         st.info("Ainda nao ha observacoes FI-Infra persistidas. Atualize os dados oficiais.")
         return
     latest_date = observations["data_solicitada"].max()
-    latest = observations[observations["data_solicitada"] == latest_date]
+    latest_for_date = observations[observations["data_solicitada"] == latest_date]
+    latest_collection = latest_for_date.iloc[0]["collection_id"]
+    latest = latest_for_date[latest_for_date["collection_id"] == latest_collection]
     coverage = latest["ticker"].nunique()
     collections = observations["collection_id"].nunique()
     cols = st.columns(3)
     cols[0].metric("Observacoes FI-Infra", len(observations))
     cols[1].metric("Coletas registradas", collections)
-    cols[2].metric("Cobertura mais recente", f"{coverage}/4")
+    cols[2].metric("Cobertura mais recente", f"{coverage}/{len(FUNDOS_PADRAO)}")
     st.caption(f"Ultima observacao solicitada: {latest_date:%d/%m/%Y}.")
 
 

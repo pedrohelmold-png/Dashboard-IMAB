@@ -24,11 +24,10 @@ Diario da CVM. Confira os tres sinais e salve o snapshot semanal. Limiares,
 snapshots e tranches ficam no SQLite configurado em
 `config.py`.
 
-Taxa de administração e duration passam a ser consultadas nas divulgações
-primárias de Itaú Asset (IFRA11), Kinea (KDIF11) e Sparta/B3 (JURO11). A tela
-mostra fonte e status de defasagem; se a publicação não puder ser lida — hoje,
-o BDIF11 — o campo continua destacado para preenchimento manual, em vez de
-usar um agregador sem trilha de auditoria.
+Taxa de administração e duration são consultadas nas divulgações primárias de
+Itaú Asset (IFRA11), Kinea (KDIF11) e Sparta/B3 (JURO11). A cesta exclui fundos
+com taxa de performance, para que o score de desconto use apenas custos recorrentes
+explicitamente observáveis.
 
 O contrato de decisao e os limites metodologicos da regua estao em
 [`docs/DECISION_CONTRACT.md`](docs/DECISION_CONTRACT.md). A zona se refere a

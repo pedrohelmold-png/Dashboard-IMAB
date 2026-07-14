@@ -39,8 +39,8 @@ class CollectorFiInfraTests(unittest.TestCase):
     def tearDown(self):
         clear_collector_cache()
 
-    def test_cadastro_mestre_tem_os_quatro_fundos(self):
-        self.assertEqual(set(FIINFRA_FUNDOS), {"IFRA11", "BDIF11", "KDIF11", "JURO11"})
+    def test_cadastro_mestre_exclui_fundo_com_taxa_de_performance(self):
+        self.assertEqual(set(FIINFRA_FUNDOS), {"IFRA11", "KDIF11", "JURO11"})
         self.assertEqual(FIINFRA_FUNDOS["KDIF11"], "26.324.298/0001-89")
 
     def test_ntnb_escolhe_duration_mais_proxima(self):
@@ -224,7 +224,7 @@ class CollectorFiInfraTests(unittest.TestCase):
         self.assertEqual(result["premissas"]["IFRA11"]["data"], date(2026, 6, 30))
         self.assertAlmostEqual(result["premissas"]["KDIF11"]["duration"], 4.396212)
         self.assertAlmostEqual(result["premissas"]["JURO11"]["duration"], 4.7)
-        self.assertIn("BDIF11", result["fontes_tentadas"])
+        self.assertNotIn("BDIF11", result["fontes_tentadas"])
 
 
 if __name__ == "__main__":

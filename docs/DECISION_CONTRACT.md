@@ -36,7 +36,7 @@ para avaliar resultados subsequentes fora da amostra.
 
 ## Regras de qualidade
 
-- A recomendação exige cobertura de ao menos 3 dos 4 fundos monitorados.
+- A recomendação exige cobertura de todos os 3 fundos monitorados.
 - Dados oficiais e premissas manuais são identificados separadamente.
 - Premissas de spread, taxa e duration precisam de fonte, data-base e
   confirmação humana antes de sustentar um snapshot operacional.

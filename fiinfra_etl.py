@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 
@@ -27,7 +28,12 @@ logger = logging.getLogger("fiinfra_etl")
 
 def duration_alvo() -> float:
     """Usa a duration mediana previamente confirmada; sem historico, 8 anos."""
-    fundos = load_fiinfra_fundos()
+    try:
+        fundos = load_fiinfra_fundos()
+    except sqlite3.OperationalError:
+        # Permite a coleta em ambiente ainda nao inicializado; o ponto de
+        # entrada normal inicializa o schema antes da execucao.
+        return 8.0
     if fundos.empty or "duration" not in fundos:
         return 8.0
     values = pd.to_numeric(fundos["duration"], errors="coerce").dropna()

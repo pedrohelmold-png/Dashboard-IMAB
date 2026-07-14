@@ -21,7 +21,7 @@ from src.fiinfra_ui import (
     _snapshot_payload,
     _sources_summary,
 )
-from src.regua_fiinfra import avaliar_sinais
+from src.regua_fiinfra import FUNDOS_PADRAO, avaliar_sinais
 
 
 def _macro(ref_date):
@@ -48,7 +48,7 @@ def _fundos(ref_date):
         "cota_patrimonial_data": ref_date,
         "cota_mercado_status": "ATUALIZADO",
         "cota_patrimonial_status": "ATUALIZADO",
-    } for ticker in ("IFRA11", "BDIF11", "KDIF11", "JURO11")]
+    } for ticker in FUNDOS_PADRAO]
 
 
 class FiInfraUiTests(unittest.TestCase):

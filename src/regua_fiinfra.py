@@ -23,7 +23,9 @@ DEFAULT_THRESHOLDS = {
     "excesso_barato": 4.0,
 }
 
-FUNDOS_PADRAO = ("IFRA11", "BDIF11", "KDIF11", "JURO11")
+# A cesta exclui fundos que cobram taxa de performance, para que o score
+# compare custos recorrentes explicitamente observáveis.
+FUNDOS_PADRAO = ("IFRA11", "KDIF11", "JURO11")
 
 MANDATO_CAIXA = "Caixa oportunista"
 MANDATO_JURO_REAL = "Juro real"
